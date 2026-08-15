@@ -1,0 +1,5 @@
+# dsh-kimicode-swarm bundle patch: host plugin (swarm_batch tool + /swarm
+# command) and browser half (in-chat progress panel).
+- insert:
+    - id: dsh-kimicode-swarm
+      name: dsh-kimicode-swarm
