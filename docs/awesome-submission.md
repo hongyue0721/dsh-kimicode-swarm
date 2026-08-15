@@ -17,8 +17,8 @@
 - [x] 仓库 package.json 声明 `dsh.bundle.patch`（`dsh plugin add` 可安装）
 - [x] 仓库添加 `dsh-plugin` topic（2026-08-15 已加）
 - [x] 官方 @deepseek-ai/* 运行时包声明为 peerDependencies
-- [ ] 发布 npm（`npm publish`，需先 `npm login`）——推荐项，预构建安装免 allowBuilds
-- [ ] 提交 PR：fork awesome-dsh-plugin → 两个 README 各加一行 → PR
+- [x] 发布 npm：dsh-kimicode-swarm@0.1.0（2026-08-15，npm 强制新账号 2FA，用勾选 Bypass 2FA 的 Granular token 发布）
+- [x] 提交 PR：https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/669
 
 ## PR 标题建议
 
