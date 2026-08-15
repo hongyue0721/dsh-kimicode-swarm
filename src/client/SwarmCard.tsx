@@ -1,0 +1,197 @@
+/**
+ * In-chat swarm panel: the keyed `tool.call.toolview` view for `swarm_batch`.
+ *
+ * While the call runs it renders live per-subagent status rows fed by the
+ * host's swarm/progress session events (queued -> running -> settled), like
+ * Kimi Code's parallel swarm list. After settlement it renders the full panel
+ * from the tool's `presentationMeta` (structured `subagents` riding the
+ * result node's `meta`), with expandable result bodies. Falls back to the
+ * result text when the meta is absent.
+ */
+import { useEffect, useState, type JSX } from 'react'
+import type { ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ToolCallOwnerProps } from '@deepseek-ai/dsh-client-ui-tool/client'
+import type { SwarmProgressEntry } from '../core/scheduler.ts'
+import { getSwarmProgress, subscribeSwarmProgress } from './progress-store.ts'
+import css from './swarm.module.css'
+
+/** Card props: the owner payload (locale seat omitted — fixed Chinese copy). */
+export type SwarmCardProps = ToolCallOwnerProps
+
+/** Structured subagent row produced by the host's presentationMeta. */
+export interface SwarmSubagentView {
+  index: number
+  item: string | null
+  type: string | null
+  model: string | null
+  status: 'completed' | 'failed' | 'aborted'
+  state: string | null
+  agentId: string | null
+  error: string | null
+  result: string | null
+}
+
+/** Structured presentation meta (mirror of the host projection). */
+export interface SwarmMetaView {
+  description?: string
+  xml?: string
+  subagents?: SwarmSubagentView[]
+}
+
+/** Status copy for both live progress rows and settled rows. */
+const STATUS_LABEL: Record<string, string> = {
+  queued: '排队',
+  running: '运行中',
+  completed: '完成',
+  failed: '失败',
+  aborted: '中止',
+}
+
+function parseMeta(meta: unknown): SwarmMetaView | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined
+  const candidate = meta as SwarmMetaView
+  if (!Array.isArray(candidate.subagents)) return undefined
+  return candidate
+}
+
+/** Parse the raw arguments JSON of a running call (best effort). */
+function parseArgs(argsRaw: string): { description?: string; count?: number } {
+  try {
+    const parsed = JSON.parse(argsRaw) as { description?: string; items?: unknown[] }
+    return { description: parsed.description, count: parsed.items?.length }
+  } catch {
+    return {}
+  }
+}
+
+function summarizeContent(block: ToolCallBlock): string {
+  if (!('content' in block)) return ''
+  return block.content
+    .map((part) => (part.type === 'text' ? part.text : ''))
+    .join('')
+    .trim()
+}
+
+/** One live progress row (queued/running/settled), keyed by index. */
+function LiveRow({ row, open, onToggle }: {
+  row: SwarmProgressEntry
+  open: boolean
+  onToggle: () => void
+}): JSX.Element {
+  return (
+    <li className={css.row}>
+      <button
+        type="button"
+        className={`${css.rowHead} ${row.status === 'failed' ? css.rowFailed : ''}`}
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <span className={`${css.dot} ${css[row.status] ?? css.queued}`} />
+        <span className={row.status === 'running' ? css.rowRunning : css.rowItem}>
+          {row.item ?? '(resume)'}
+        </span>
+        {row.type !== null ? <span className={css.rowType}>{row.type}</span> : null}
+        {row.model !== null ? <span className={css.rowModel}>{row.model}</span> : null}
+        <span className={`${css.rowStatus} ${css[`status-${row.status}`] ?? ''}`}>
+          {STATUS_LABEL[row.status] ?? row.status}
+        </span>
+      </button>
+    </li>
+  )
+}
+
+/** Render the swarm call card. */
+export function SwarmCard({ block }: SwarmCardProps): JSX.Element | null {
+  const [openIndex, setOpenIndex] = useState<number | null>(null)
+  const [liveRows, setLiveRows] = useState<SwarmProgressEntry[] | undefined>(() =>
+    'argsRaw' in block ? getSwarmProgress(block.callId) : undefined,
+  )
+  const settled = 'kind' in block && block.kind === 'tool-result'
+  const callId = 'argsRaw' in block ? block.callId : undefined
+
+  // Live progress feed while the call is still running.
+  useEffect(() => {
+    if (settled || callId === undefined) return
+    const unsubscribe = subscribeSwarmProgress((id, entries) => {
+      if (id === callId) setLiveRows(entries)
+    })
+    const current = getSwarmProgress(callId)
+    if (current !== undefined) setLiveRows(current)
+    return unsubscribe
+  }, [settled, callId])
+
+  const args = 'argsRaw' in block ? parseArgs(block.argsRaw) : undefined
+  const meta = settled && 'meta' in block ? parseMeta(block.meta) : undefined
+  const text = settled ? summarizeContent(block) : undefined
+  const rows = meta?.subagents ?? []
+  const completed = rows.filter((r) => r.status === 'completed').length
+  const failed = rows.filter((r) => r.status === 'failed').length
+  const aborted = rows.filter((r) => r.status === 'aborted').length
+  const live = liveRows ?? []
+  const liveCompleted = live.filter((r) => r.status === 'completed').length
+  const liveFailed = live.filter((r) => r.status === 'failed').length
+
+  return (
+    <div className={css.card}>
+      <div className={css.header}>
+        <span className={css.title}>Swarm 批量并行</span>
+        {settled ? (
+          <span className={css.summary}>
+            {completed > 0 ? <em className={css.ok}>{completed} 完成</em> : null}
+            {failed > 0 ? <em className={css.bad}>{failed} 失败</em> : null}
+            {aborted > 0 ? <em className={css.muted}>{aborted} 中止</em> : null}
+          </span>
+        ) : (
+          <span className={css.summary}>
+            <em className={css.ok}>{liveCompleted} 完成</em>
+            {liveFailed > 0 ? <em className={css.bad}>{liveFailed} 失败</em> : null}
+            <em className={css.running}>执行中…</em>
+          </span>
+        )}
+      </div>
+      <div className={css.description}>
+        {(settled ? meta?.description : args?.description) ?? '批量子任务'}
+        {args?.count !== undefined ? <span className={css.count}>{args.count} 项</span> : null}
+      </div>
+      {!settled && live.length > 0 ? (
+        <ul className={css.rows}>
+          {live.map((row) => (
+            <LiveRow
+              key={row.index}
+              row={row}
+              open={false}
+              onToggle={() => { /* running rows are not expandable */ }}
+            />
+          ))}
+        </ul>
+      ) : settled && rows.length > 0 ? (
+        <ul className={css.rows}>
+          {rows.map((row) => (
+            <li key={row.index} className={css.row}>
+              <button
+                type="button"
+                className={`${css.rowHead} ${row.status === 'failed' ? css.rowFailed : ''}`}
+                aria-expanded={openIndex === row.index}
+                onClick={() => { setOpenIndex(openIndex === row.index ? null : row.index) }}
+              >
+                <span className={`${css.dot} ${css[row.status]}`} />
+                <span className={css.rowItem}>{row.item ?? '(resume)'}</span>
+                {row.type !== null ? <span className={css.rowType}>{row.type}</span> : null}
+                {row.model !== null ? <span className={css.rowModel}>{row.model}</span> : null}
+                <span className={css.rowStatus}>{STATUS_LABEL[row.status]}</span>
+                <span className={css.chevron}>{openIndex === row.index ? '▾' : '▸'}</span>
+              </button>
+              {openIndex === row.index ? (
+                <pre className={css.rowBody}>
+                  {row.status === 'completed' ? (row.result ?? '') : (row.error ?? '')}
+                </pre>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : text !== undefined && text.length > 0 ? (
+        <pre className={css.rowBody}>{text}</pre>
+      ) : null}
+    </div>
+  )
+}
