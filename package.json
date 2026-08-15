@@ -44,7 +44,13 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-subagent": "*",
+    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-llm": "*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
