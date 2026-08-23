@@ -1,10 +1,13 @@
 /**
  * Module-level progress store for running swarm_batch calls. The browser
- * half's apply() opens a mux stream and publishes every swarm/progress event
- * here; SwarmCard components subscribe by call id. Module scope is fine:
- * the client bundle is a singleton per page.
+ * half's apply() opens an EventSource to the host /swarm-events route and
+ * publishes every progress frame here; SwarmCard components subscribe by
+ * call id. Module scope is fine: the client bundle is a singleton per page.
  */
 import type { SwarmProgressEntry } from '../core/scheduler.ts'
+
+/** The host route serving progress frames (same-origin relative URL). */
+export const SWARM_PROGRESS_ROUTE = '/swarm-events'
 
 /** One subscribed component's change listener. */
 type Listener = (callId: string, entries: SwarmProgressEntry[]) => void

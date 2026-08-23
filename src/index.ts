@@ -13,8 +13,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 // Type-only: pulls the ctx.commands Context merge.
 import type {} from '@deepseek-ai/dsh-commands'
-// Module augmentation: the swarm/progress session event type.
-import './events.ts'
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from 'schemastery'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { normalizeSwarmArgs, type ModelResolver } from './core/normalize.ts'
@@ -27,6 +26,11 @@ import {
   type SwarmTask,
   type SwarmToolArgs,
 } from './core/types.ts'
+import {
+  createProgressBroadcaster,
+  SWARM_PROGRESS_ROUTE,
+  type ProgressBroadcaster,
+} from './progress.ts'
 
 /** Order of the announcement section within the tool-guidance band. */
 const SECTION_ORDER = 200
@@ -149,12 +153,18 @@ function escapeXml(value: string): string {
  * @param ctx - the plugin context (systemPrompt/tools/subagents/commands injected).
  * @param config - resolved plugin config (schema defaults applied by the loader).
  */
-export const inject = ['systemPrompt', 'tools', 'subagents', 'commands', 'settings']
+export const inject = ['systemPrompt', 'tools', 'subagents', 'commands', 'settings', 'webServer']
 export function apply(ctx: Context, config?: Config): void {
   let current: () => Config = () => config ?? {}
   let disposeSection: (() => void) | undefined
   let disposeTool: (() => void) | undefined
   let disposeCommand: (() => void) | undefined
+  let disposeRoute: (() => void) | undefined
+
+  // Live progress transport. Progress is display-only, so it never enters the
+  // session log (rc.8 rejects out-of-vocabulary events on read); the SSE route
+  // serves running-call snapshots to subscribed browser halves instead.
+  const broadcaster = createProgressBroadcaster()
 
   const sync = (): void => {
     if (disposeSection !== undefined) {
@@ -169,6 +179,10 @@ export function apply(ctx: Context, config?: Config): void {
       disposeCommand()
       disposeCommand = undefined
     }
+    if (disposeRoute !== undefined) {
+      disposeRoute()
+      disposeRoute = undefined
+    }
     if ((current().enabled ?? true) === false) return
     if ((current().announceToAgent ?? DEFAULT_ANNOUNCE) === true) {
       disposeSection = ctx.systemPrompt.section({
@@ -177,7 +191,34 @@ export function apply(ctx: Context, config?: Config): void {
         text: SWARM_GUIDANCE,
       })
     }
-    disposeTool = ctx.tools.register(swarmTool(ctx, current))
+    disposeTool = ctx.tools.register(swarmTool(ctx, current, broadcaster))
+    // webServer is declared in inject so the property is readable; it is
+    // absent (undefined) when the host runs without a web layer, in which
+    // case the progress route is simply not registered and the browser half
+    // falls back at runtime.
+    if (ctx.webServer !== undefined) {
+      disposeRoute = ctx.webServer.register({
+      kind: 'exact',
+      path: SWARM_PROGRESS_ROUTE,
+      handler: (req, res) => {
+        if (req.method !== 'GET') {
+          res.writeHead(405, { 'content-type': 'text/plain' })
+          res.end('method not allowed')
+          return
+        }
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+        })
+        res.write('retry: 3000\n\n')
+        const detach = broadcaster.subscribe(res)
+        // Request teardown detaches the stream; write failures self-prune.
+        req.on('close', detach)
+      },
+    })
+    }
     disposeCommand = ctx.commands.register({
       name: 'swarm',
       description: 'batch-parallel subagent dispatch: /swarm <task description>',
@@ -229,7 +270,11 @@ export function apply(ctx: Context, config?: Config): void {
 }
 
 /** Build the `swarm_batch` tool definition against the live settings source. */
-function swarmTool(ctx: Context, getConfig: () => Config) {
+function swarmTool(
+  ctx: Context,
+  getConfig: () => Config,
+  broadcaster: ProgressBroadcaster,
+) {
   const modelResolver: ModelResolver = {
     resolve(explicit, type) {
       if (explicit !== undefined && explicit.length > 0) return { model: explicit }
@@ -317,13 +362,14 @@ function swarmTool(ctx: Context, getConfig: () => Config) {
         }
       }
 
-      // Live progress: every status change is appended as a swarm/progress
-      // session event so the chat card can render per-subagent status rows
-      // while the batch is still running.
-      const session = exec.agent.session
+      // Live progress: every status change is pushed over the SSE route so
+      // the chat card can render per-subagent status rows while the batch is
+      // still running. Deliberately NOT appended to the session log — rc.8
+      // rejects out-of-vocabulary events on read, so a logged progress event
+      // would brick the whole session.
       const scheduler = new SwarmScheduler(spawn, {
         onProgress: (subagents) => {
-          session.append('swarm/progress', { callId: exec.callId, subagents })
+          broadcaster.publish({ callId: exec.callId, subagents })
         },
       })
       const results = await scheduler.run(normalized.tasks, exec.signal)
