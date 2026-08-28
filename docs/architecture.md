@@ -21,15 +21,15 @@
 │    │    ├─ core/normalize.ts：参数归一化                      │
 │    │    ├─ core/scheduler.ts：两阶段自适应并发调度            │
 │    │    ├─ ctx.subagents.start()：真实子 Agent 启动          │
-│    │    └─ session.append('swarm/progress')：进度事件         │
+│    │    └─ progress.ts：createProgressBroadcaster → SSE 帧   │
+│    │        （/swarm-events 路由，SWARM_PROGRESS_ROUTE）       │
 │    ├─ ctx.commands.register(/swarm)                          │
 │    ├─ installSettingsSection('swarm')                        │
 │    └─ systemPrompt.section（插件公告）                        │
-│  src/events.ts — SessionEventMap 模块扩展（swarm/progress）   │
 └──────────────────────────────────────────────────────────────┘
 ┌─ browser 半区（Web GUI）─────────────────────────────────────┐
-│  src/client/index.ts — apply：开 mux 流 + 注册槽位             │
-│  src/client/progress-store.ts — 模块级进度订阅                │
+│  src/client/index.ts — apply：开同源 EventSource + 注册槽位    │
+│  src/client/progress-store.ts — 模块级进度存储（按 callId）    │
 │  src/client/SwarmCard.tsx — tool.call.toolview keyed 视图     │
 │  src/client/SwarmSettingsCard.tsx — 设置卡片                  │
 └──────────────────────────────────────────────────────────────┘
@@ -61,10 +61,13 @@
 
 ### 2.3 browser 半区
 
-- **进度通道**：host 端 `session.append('swarm/progress', { callId, subagents })`
-  （`SessionEventMap` 官方支持插件合并扩展）；client 端自开 mux 流
-  （`connection.api.events.mux`）过滤该事件，写入模块级 `progress-store`；
-  `SwarmCard` 按 `block.callId` 订阅渲染。
+- **进度通道**：host 端 `createProgressBroadcaster()`（`src/progress.ts`）持有按
+  callId 的全量快照存储与 SSE 帧写入器，经 `ctx.webServer.register` 挂在
+  `/swarm-events` 路由（`SWARM_PROGRESS_ROUTE`）；client 端 `apply()` 开同源
+  EventSource 订阅该路由，把 `progress` 事件帧写入模块级 `progress-store`
+  （按 callId 存最新快照）；`SwarmCard` 按 `block.callId` 订阅渲染。进度是纯展示
+  数据，**不写入会话日志**——rc.8 拒绝词表外会话事件（`swarm/progress` 不在宿主
+  词表内，append 也无法标记可忽略），写进去会直接毁掉整个会话。
 - **面板**：`tool.call.toolview` keyed 视图（官方文档明示支持「a tool your own
   package registered」）。运行中渲染 LiveRow（排队/运行中/完成，蓝点脉冲动画）；
   完成后从 `ToolResultNode.meta`（presentationMeta 结构化投影）渲染结果面板。
@@ -103,38 +106,51 @@
 | 模型选择 | `model: primary\|secondary` 整批二选一，**默认关闭的实验** | 每 item 可显式指定，或映射表，或继承调用者（LLM 自由） |
 | 调度 | 5 + 700ms 爬坡；限流指数退避；容量自适应 | 同参数实现 |
 | 失败续做 | `resume_agent_ids` | 同构 |
-| 前端 | TUI 文本状态行 | Web 聊天内实时进度条（mux 事件流） |
+| 前端 | TUI 文本状态行 | Web 聊天内实时进度条（SSE `/swarm-events` + EventSource） |
 | 冲突保护 | 无文件锁，靠语义拆分 | 同（不重复造） |
 
 ## 5. 进度事件设计
 
+早期设计把进度作为 `swarm/progress` 会话事件（`SessionEventMap` 模块扩展 + mux 流）下发，
+在 rc.8 迁移中废弃（commit 1c09744）：rc.8 会话日志在读取时拒绝词表外事件类型，
+`append()` 也无法把该事件标记为可忽略——写进日志会毁掉整个会话。进度因此改为
+**纯展示的 SSE 通道**，与会话日志完全隔离。
+
 ```ts
-declare module '@deepseek-ai/dsh-session' {
-  interface SessionEventMap {
-    'swarm/progress': {
-      callId: string        // 工具调用 id，前端卡片关联
-      subagents: Array<{   // 全量有序快照（输入顺序）
-        index: number
-        item: string | null
-        type: string | null
-        model: string | null
-        status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
-      }>
-    }
-  }
+// src/progress.ts
+export const SWARM_PROGRESS_ROUTE = '/swarm-events'   // host 路由
+export const SWARM_PROGRESS_EVENT = 'progress'        // SSE 事件名
+
+export interface SwarmProgressFrame {
+  callId: string
+  subagents: Array<{
+    index: number
+    item: string | null
+    type: string | null
+    model: string | null
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+  }>
 }
 ```
 
-- **快照式**：每次状态变化发全量列表，最新事件即可重建完整状态，客户端无需增量合并。
-- **生命周期**：mux 流随插件生命周期常驻；store 按 callId 存最新快照，卡片挂载时
-  先读快照再订阅增量。
+- **快照式**：每次状态变化发全量有序列表（输入顺序），最新一帧即可重建完整状态，
+  客户端无需增量合并。帧序列化为一条 SSE 记录：`event: progress` + JSON `data`。
+- **传输**：host 端 `createProgressBroadcaster()` 维护附件集合与共享心跳定时器
+  （15s，防代理掐空闲连接），`publish()` 把一帧写给所有附件，写失败自动摘除；
+  路由经 `ctx.webServer.register` 挂在 `/swarm-events`（无 web 层时跳过注册）。
+  client 端 `apply()` 开同源 EventSource（相对 URL，浏览器与宿主同源），
+  `progress` 事件帧写入模块级 `progress-store`（按 callId 存最新快照）。
+- **生命周期**：EventSource 随插件生命周期常驻；store 按 callId 存最新快照，
+  卡片挂载时先读快照再订阅增量。
 - 运行中状态：`queued`（排队，灰点）→ `running`（运行中，蓝点脉冲）→
   `completed/failed/aborted`（终态着色）。
 
 ## 6. 关键决策记录
 
 1. **不嵌套子工具调用**：DSH 的嵌套 dispatch（`subCalls`）与 Code Mode 绑定，普通工具
-   不可用；进度走自定义会话事件 + mux 流（官方扩展点），零宿主改动。
+   不可用；进度走自定义 SSE 路由 + 同源 EventSource（官方 webServer 扩展点），
+   零宿主改动。早期曾用自定义会话事件 + mux 流，rc.8 拒绝词表外会话事件后废弃
+   （commit 1c09744），进度改为纯展示通道，不落会话日志。
 2. **调度器必须等全部 settle**：早期实现同步返回半空结果数组导致
    `Cannot read properties of undefined (reading 'agentId')`（真实异步 spawn 场景）；
    已加 `allSettled` 屏障 + 回归测试。
@@ -150,7 +166,8 @@ declare module '@deepseek-ai/dsh-session' {
 
 ## 7. 测试与验收
 
-- 21 个单元测试：爬坡节奏、限流退避与容量恢复、取消状态保留、超时独立失败、
-  回归（异步 spawn 不提前返回）、参数归一化（模型解析/去重/边界）。
+- 30 个单元测试：爬坡节奏、限流退避与容量恢复、取消状态保留、超时独立失败、
+  回归（异步 spawn 不提前返回）、参数归一化（模型解析/去重/边界）、进度广播
+  （帧序列化/扇出/心跳/摘除）。
 - 真实压测（2026-08-15）：3/12/30 任务三轮全绿；20 任务慢任务（sleep 4s）实测
   中间态「8 完成 + 6 运行中 + 6 排队」实时刷新，完成后无缝切换结果面板。
