@@ -10,6 +10,10 @@
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
+<p align="center">
+  <strong>English</strong> · <a href="./README.md">简体中文</a>
+</p>
+
 ---
 
 A port of **Kimi Code Swarm mode** (master/worker parallel multi-agent) into DeepSeek Harness:

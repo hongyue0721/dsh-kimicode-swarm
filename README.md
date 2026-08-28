@@ -10,6 +10,10 @@
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
+<p align="center">
+  <a href="./README.en.md">English</a> · <strong>简体中文</strong>
+</p>
+
 ---
 
 把 **Kimi Code Swarm 模式**（主从式多 Agent 并行）搬进 DeepSeek Harness：主 Agent 把任务
