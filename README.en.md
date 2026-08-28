@@ -6,7 +6,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
   <img src="https://img.shields.io/badge/Host-DeepSeek%20Harness-informational?style=flat-square" alt="DeepSeek Harness" />
-  <img src="https://img.shields.io/badge/Tests-30%20passed-brightgreen?style=flat-square" alt="30 unit tests" />
+  <img src="https://img.shields.io/badge/Tests-48%20passed-brightgreen?style=flat-square" alt="48 unit tests" />
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
@@ -162,7 +162,7 @@ swarm:
 ```sh
 pnpm install
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest (30 tests: scheduler ramp/rate-limit/cancel/timeout + normalization + progress)
+pnpm test        # vitest (48 tests: scheduler ramp/rate-limit/cancel/timeout/capacity-recovery + normalization + progress + render round-trip + store lifecycle)
 pnpm build       # lib/ (host half) + lib/client.js (browser half)
 ```
 

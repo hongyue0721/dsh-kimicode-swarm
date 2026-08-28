@@ -6,7 +6,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
   <img src="https://img.shields.io/badge/Host-DeepSeek%20Harness-informational?style=flat-square" alt="DeepSeek Harness" />
-  <img src="https://img.shields.io/badge/Tests-30%20passed-brightgreen?style=flat-square" alt="30 unit tests" />
+  <img src="https://img.shields.io/badge/Tests-48%20passed-brightgreen?style=flat-square" alt="48 unit tests" />
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
@@ -142,7 +142,7 @@ swarm:
 ```sh
 pnpm install
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest（30 个用例：调度爬坡/限流/取消/超时 + 参数归一化 + 进度广播）
+pnpm test        # vitest（48 个用例：调度爬坡/限流/取消/超时/容量恢复 + 参数归一化 + 进度广播 + 渲染往返 + store 生命周期）
 pnpm build       # lib/（host 半区）+ lib/client.js（browser 半区）
 ```
 
