@@ -86,7 +86,11 @@ export function resolveOptions(options: SchedulerOptions = {}): ResolvedSchedule
     maxConcurrency: options.maxConcurrency ?? 0,
     timeoutMs: options.timeoutMs ?? 0,
     now: options.now ?? Date.now,
-    setTimeout: options.setTimeout ?? ((fn, ms) => setTimeout(fn, ms)),
+    setTimeout: options.setTimeout ?? ((fn, ms) => {
+      const handle = setTimeout(fn, ms)
+      handle.unref?.()
+      return handle
+    }),
     clearTimeout: options.clearTimeout ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)),
     onProgress: options.onProgress,
   }
@@ -259,7 +263,7 @@ export class SwarmScheduler {
         rateLimitMode = true
         // Enter with capacity equal to ready launches, minimum 1; next global
         // launch no earlier than the base retry delay.
-        capacity = Math.max(1, Math.min(normalLaunches, count))
+        capacity = Math.max(1, Math.min(active.size + pending.length, count))
         nextLaunchAt = now + opts.rateLimitRetryBaseMs
         lastRateLimitAt = now
         lastCapacityShrinkAt = now
@@ -309,6 +313,17 @@ export class SwarmScheduler {
       }
 
       if (rateLimitMode) {
+        // Capacity recovery: after a quiet window with no rate limits, grow back.
+        const recoveryAt = lastRateLimitAt + opts.rateLimitCapacityRecoveryIntervalMs
+        if (now >= recoveryAt) {
+          capacity += 1
+          lastRateLimitAt = now
+          // Exit rate-limit mode once capacity reaches the total task count
+          // (the unconstrained ceiling). Further launches proceed in normal mode.
+          if (capacity >= count) {
+            rateLimitMode = false
+          }
+        }
         if (active.size >= capacity || now < nextLaunchAt) {
           wake()
           return
@@ -355,6 +370,9 @@ export class SwarmScheduler {
       const now = opts.now()
       const at = Math.max(wakeAt(), now)
       wakeTimer = opts.setTimeout(schedule, at - now)
+      // Don't keep the Node process alive for scheduler wake timers.
+      const handle = wakeTimer as { unref?: () => void } | undefined
+      handle?.unref?.()
     }
 
     /** First pending slot whose personal delay has elapsed, or undefined. */
@@ -394,6 +412,7 @@ export class SwarmScheduler {
         timedOut = true
         timeoutSignal.abort()
       }, opts.timeoutMs)
+      ;(timer as { unref?: () => void })?.unref?.()
     }
     try {
       const outcome = await this.spawn(slot.task, timeoutSignal.signal)
@@ -412,7 +431,7 @@ export class SwarmScheduler {
       return {
         agentId: slot.agentId,
         status: 'failed',
-        state: 'started',
+        state: slot.agentId !== undefined ? 'started' : 'not_started',
         error: timedOut ? `subagent timed out after ${opts.timeoutMs}ms` : String(error),
       }
     } finally {
