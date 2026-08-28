@@ -89,6 +89,7 @@
     "README.en.md",
     "docs",
     "assets",
+    "screenshots.json",
     "LICENSE"
   ],
   "license": "MIT"
