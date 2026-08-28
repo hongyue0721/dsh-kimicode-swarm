@@ -451,7 +451,10 @@ function swarmTool(
             agentOptions:
               task.model === undefined
                 ? undefined
-                : { provider: task.model.provider, model: task.model.model },
+                : {
+                    ...(task.model.provider !== undefined ? { provider: task.model.provider } : {}),
+                    model: task.model.model,
+                  },
           })
           const result = await run.result
           const completed = result.stopReason === 'completed'
