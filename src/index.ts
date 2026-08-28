@@ -40,13 +40,16 @@ const SUBAGENT_PROVIDER = 'spawn'
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
 export const SWARM_GUIDANCE =
-  '本机已安装 dsh-swarm 插件（批量并行子 Agent 调度）：工具 `swarm_batch` 可一次派发最多 128 个' +
-  '独立子任务并行执行（prompt_template + items 批量生成，模板占位符按工具参数描述使用；也可 resume_agent_ids 断点续做）。' +
-  '适合批量代码审查、互不依赖的多文件重构、并行调研、批量生成。' +
-  '模型分配三级策略：item 级/整批显式 model > 设置映射表（按 type 命中）> 继承调用者模型（默认，由 agent 自由分配）。' +
-  '调度自动渐进式启动与限流退避；用户可随时取消，已完成结果保留。' +
-  '不适合强依赖串行任务与单文件深度修改（拆分反而增加合并成本）。' +
-  '用户提到「swarm / 批量并行 / 并行子任务」时即指本插件，请据此协作。'
+  'This machine has the dsh-swarm plugin installed (batch-parallel sub-agent dispatch): the `swarm_batch` tool can ' +
+  'dispatch up to 128 independent subtasks in parallel in one call (prompt_template + items batch-generate; the template ' +
+  'placeholder follows the tool parameter description; resume_agent_ids also supports resuming unfinished work). ' +
+  'Good for batch code review, independent multi-file refactors, parallel research, and batch generation. ' +
+  'Three-tier model assignment policy: item-level/whole-batch explicit model > settings mapping table (matched by type) > ' +
+  'inherit the caller\'s model (default, freely assigned by the agent). ' +
+  'Scheduling ramps up automatically and backs off under rate limits; the user can cancel at any time, and completed ' +
+  'results are kept. ' +
+  'Not suited to strongly sequential, dependent tasks or deep single-file edits (splitting those up only adds merge cost). ' +
+  'When the user mentions "swarm / batch-parallel / parallel subtasks", they mean this plugin — cooperate accordingly.'
 
 /** Settings namespace of the swarm plugin (spelled here and in the browser half). */
 export const SWARM_SETTINGS_NAMESPACE = settingsNamespace('swarm')
@@ -255,20 +258,20 @@ export function apply(ctx: Context, config?: Config): void {
               {
                 type: 'text',
                 text:
-                  '你现在处于 Swarm 模式（一次性任务）。遵循以下工作流：\n' +
-                  '1. 先做少量探索性工作确认任务边界（必要时读取项目结构）；\n' +
-                  '2. 把任务拆解为互不依赖的独立子任务，每项一个；\n' +
-                  '3. 调用 swarm_batch 工具批量并行派发：prompt_template 含 {{item}} 占位符，' +
-                  'items 每项对应一个子任务，每项 prompt 自包含所需背景，避免子 Agent 来回询问；\n' +
-                  '4. 全部完成后汇总各子任务结果为最终答复。\n' +
-                  '任务完成后自动退出 Swarm 模式，后续按普通任务处理。' +
-                  `\n\n任务：${task}`,
+                  'You are now in Swarm mode (one-shot task). Follow this workflow:\n' +
+                  '1. Do a small amount of exploratory work first to confirm the task boundary (read the project structure if needed);\n' +
+                  '2. Break the task into independent subtasks that do not depend on each other, one per item;\n' +
+                  '3. Call the swarm_batch tool to dispatch them in batch-parallel: prompt_template contains the {{item}} placeholder, ' +
+                  'each entry in items corresponds to one subtask, and each item\'s prompt is self-contained with the background it needs, so the sub-agents do not need to ask back and forth;\n' +
+                  '4. Once everything is done, summarize the subtask results into a final answer.\n' +
+                  'Swarm mode exits automatically once the task is complete; anything after that is handled as a normal task.' +
+                  `\n\nTask: ${task}`,
               },
             ],
             source: { kind: 'plugin', plugin: 'dsh-swarm' },
           }),
         )
-        return { kind: 'success', text: 'Swarm 模式已进入，任务已派发给 agent 执行' }
+        return { kind: 'success', text: 'Entered Swarm mode; the task has been dispatched to the agent' }
       },
     })
   }

@@ -15,7 +15,7 @@ import type { SwarmProgressEntry } from '../core/scheduler.ts'
 import { dropSwarmProgress, getSwarmProgress, subscribeSwarmProgress } from './progress-store.ts'
 import css from './swarm.module.css'
 
-/** Card props: the owner payload (locale seat omitted — fixed Chinese copy). */
+/** Card props: the owner payload (locale seat omitted — fixed English copy). */
 export type SwarmCardProps = ToolCallOwnerProps
 
 /** Structured subagent row produced by the host's presentationMeta. */
@@ -40,11 +40,11 @@ export interface SwarmMetaView {
 
 /** Status copy for both live progress rows and settled rows. */
 const STATUS_LABEL: Record<string, string> = {
-  queued: '排队',
-  running: '运行中',
-  completed: '完成',
-  failed: '失败',
-  aborted: '中止',
+  queued: 'Queued',
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+  aborted: 'Aborted',
 }
 
 function parseMeta(meta: unknown): SwarmMetaView | undefined {
@@ -151,24 +151,24 @@ export function SwarmCard({ block }: SwarmCardProps): JSX.Element | null {
   return (
     <div className={css.card}>
       <div className={css.header}>
-        <span className={css.title}>Swarm 批量并行</span>
+        <span className={css.title}>Swarm batch-parallel</span>
         {settled ? (
           <span className={css.summary}>
-            {completed > 0 ? <em className={css.ok}>{completed} 完成</em> : null}
-            {failed > 0 ? <em className={css.bad}>{failed} 失败</em> : null}
-            {aborted > 0 ? <em className={css.muted}>{aborted} 中止</em> : null}
+            {completed > 0 ? <em className={css.ok}>{completed} completed</em> : null}
+            {failed > 0 ? <em className={css.bad}>{failed} failed</em> : null}
+            {aborted > 0 ? <em className={css.muted}>{aborted} aborted</em> : null}
           </span>
         ) : (
           <span className={css.summary}>
-            <em className={css.ok}>{liveCompleted} 完成</em>
-            {liveFailed > 0 ? <em className={css.bad}>{liveFailed} 失败</em> : null}
-            <em className={css.running}>执行中…</em>
+            <em className={css.ok}>{liveCompleted} completed</em>
+            {liveFailed > 0 ? <em className={css.bad}>{liveFailed} failed</em> : null}
+            <em className={css.running}>Running…</em>
           </span>
         )}
       </div>
       <div className={css.description}>
-        {(settled ? meta?.description : args?.description) ?? '批量子任务'}
-        {args?.count !== undefined ? <span className={css.count}>{args.count} 项</span> : null}
+        {(settled ? meta?.description : args?.description) ?? 'Batch subtasks'}
+        {args?.count !== undefined ? <span className={css.count}>{args.count} items</span> : null}
       </div>
       {!settled && live.length > 0 ? (
         <ul className={css.rows}>
