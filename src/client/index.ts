@@ -60,6 +60,12 @@ function startProgressStream(ctx: ClientContext): void {
       // Malformed frames are dropped; the next frame overwrites the store.
     }
   })
+  source.onerror = () => {
+    // The host may have no web server or the route may be unregistered.
+    // Close to prevent silent infinite reconnection; the card falls back
+    // to settled-only rendering without live progress.
+    source.close()
+  }
   ctx.effect(() => () => source.close(), 'dsh-swarm: progress sse')
 }
 

@@ -12,7 +12,7 @@ import { useEffect, useState, type JSX } from 'react'
 import type { ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ToolCallOwnerProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import type { SwarmProgressEntry } from '../core/scheduler.ts'
-import { getSwarmProgress, subscribeSwarmProgress } from './progress-store.ts'
+import { dropSwarmProgress, getSwarmProgress, subscribeSwarmProgress } from './progress-store.ts'
 import css from './swarm.module.css'
 
 /** Card props: the owner payload (locale seat omitted — fixed Chinese copy). */
@@ -57,8 +57,17 @@ function parseMeta(meta: unknown): SwarmMetaView | undefined {
 /** Parse the raw arguments JSON of a running call (best effort). */
 function parseArgs(argsRaw: string): { description?: string; count?: number } {
   try {
-    const parsed = JSON.parse(argsRaw) as { description?: string; items?: unknown[] }
-    return { description: parsed.description, count: parsed.items?.length }
+    const parsed = JSON.parse(argsRaw) as {
+      description?: string
+      items?: unknown[]
+      resume_agent_ids?: Record<string, unknown>
+    }
+    const itemCount = parsed.items?.length ?? 0
+    const resumeCount = parsed.resume_agent_ids !== undefined
+      ? Object.keys(parsed.resume_agent_ids).length
+      : 0
+    const count = itemCount + resumeCount
+    return { description: parsed.description, count: count > 0 ? count : undefined }
   } catch {
     return {}
   }
@@ -118,6 +127,14 @@ export function SwarmCard({ block }: SwarmCardProps): JSX.Element | null {
     const current = getSwarmProgress(callId)
     if (current !== undefined) setLiveRows(current)
     return unsubscribe
+  }, [settled, callId])
+
+  // Clean up the progress store entry after settlement (memory hygiene).
+  useEffect(() => {
+    if (!settled || callId === undefined) return
+    return () => {
+      dropSwarmProgress(callId)
+    }
   }, [settled, callId])
 
   const args = 'argsRaw' in block ? parseArgs(block.argsRaw) : undefined
