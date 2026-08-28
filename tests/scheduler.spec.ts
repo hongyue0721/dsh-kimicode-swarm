@@ -302,3 +302,163 @@ describe('options', () => {
     await promise
   })
 })
+
+describe('rate-limit capacity recovery (H2)', () => {
+  it('recovers capacity +1 after the quiet window and exits rate-limit mode', async () => {
+    // 6 tasks, initial burst 2. Task 1 hits rate limit on first launch,
+    // succeeds on retry. After 3 minutes of quiet, capacity should recover.
+    const byIndex: Record<number, SwarmAttemptResult> = {
+      1: { agentId: 'agent-1', status: 'failed', state: 'started', error: 'rate limit', rateLimited: true },
+    }
+    const { spawn, calls } = immediateSpawn({ byIndex })
+    const scheduler = new SwarmScheduler(spawn, {
+      initialLaunchLimit: 2,
+      rateLimitCapacityRecoveryIntervalMs: 3 * 60 * 1000,
+    })
+    const promise = run(scheduler, 6)
+    // Initial burst: 2 tasks launch (task 1 rate-limited, task 2 completes).
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+
+    // After the rate limit, capacity shrinks to 1. Tasks launch one-at-a-time
+    // with 3s pacing. Let the remaining tasks proceed.
+    await vi.advanceTimersByTimeAsync(30_000)
+    // Task 1 retry should have launched by now.
+    expect(calls.filter((t) => t.index === 1).length).toBe(2)
+
+    // Advance past the 3-minute recovery window. Capacity should recover,
+    // eventually reaching count (6) and exiting rate-limit mode.
+    await vi.advanceTimersByTimeAsync(4 * 60 * 1000)
+    const results = await promise
+    expect(results).toHaveLength(6)
+    expect(results.every((r) => r.status === 'completed')).toBe(true)
+  })
+
+  it('does not recover capacity before the quiet window elapses', async () => {
+    // If rate limits keep hitting, recovery should not fire because
+    // lastRateLimitAt keeps resetting.
+    const recordedCalls: SwarmTask[] = []
+    const spawn: SpawnFn = async (task) => {
+      recordedCalls.push(task)
+      // First 3 calls rate-limit; later calls succeed.
+      if (recordedCalls.length <= 3) {
+        return { agentId: `agent-${task.index}`, status: 'failed', state: 'started', error: '429 rate limit', rateLimited: true }
+      }
+      return { agentId: `agent-${task.index}`, status: 'completed', state: 'started', result: 'ok' }
+    }
+    const scheduler = new SwarmScheduler(spawn, {
+      initialLaunchLimit: 2,
+      rateLimitCapacityRecoveryIntervalMs: 60_000,
+    })
+    const promise = run(scheduler, 4)
+    await vi.advanceTimersByTimeAsync(0)
+    // 2 tasks launched in burst, both rate-limited.
+    expect(recordedCalls).toHaveLength(2)
+    // Advance 30s (less than 60s recovery) — capacity stays at 1.
+    await vi.advanceTimersByTimeAsync(30_000)
+    // Let everything settle.
+    await vi.advanceTimersByTimeAsync(120_000)
+    const results = await promise
+    expect(results).toHaveLength(4)
+  })
+})
+
+describe('spawn catch state (M3)', () => {
+  it('marks state as not_started when spawn throws before producing an agentId', async () => {
+    // A spawn that throws synchronously (never started) should report
+    // not_started, not started.
+    const throwingSpawn: SpawnFn = async () => {
+      throw new Error('provider unavailable')
+    }
+    const scheduler = new SwarmScheduler(throwingSpawn, { initialLaunchLimit: 5 })
+    const promise = run(scheduler, 2)
+    // Both tasks launch in the burst and fail immediately. Advance timers
+    // to let the async settle chain complete.
+    await vi.advanceTimersByTimeAsync(1000)
+    const results = await promise
+    expect(results.every((r) => r.status === 'failed')).toBe(true)
+    // slot.agentId is undefined (spawn threw before setting it) → not_started.
+    expect(results.every((r) => r.state === 'not_started')).toBe(true)
+  })
+
+  it('marks state as started when a retry fails but the slot has an agentId', async () => {
+    // Task 1: first call rate-limited (sets agentId), retry throws.
+    let firstCall = true
+    const spawn: SpawnFn = async (task) => {
+      if (firstCall && task.index === 1) {
+        firstCall = false
+        return { agentId: 'agent-1', status: 'failed', state: 'started', error: '429', rateLimited: true }
+      }
+      if (task.index === 1) {
+        throw new Error('provider crashed')
+      }
+      return { agentId: `agent-${task.index}`, status: 'completed', state: 'started', result: 'ok' }
+    }
+    const scheduler = new SwarmScheduler(spawn, { initialLaunchLimit: 1 })
+    const promise = run(scheduler, 2)
+    await vi.advanceTimersByTimeAsync(10_000)
+    const results = await promise
+    const task1 = results.find((r) => r.task.index === 1)!
+    expect(task1.status).toBe('failed')
+    // The slot had an agentId from the rate-limited attempt → started.
+    expect(task1.state).toBe('started')
+  })
+})
+
+describe('capacity seed (L2)', () => {
+  it('seeds capacity from active + pending rather than cumulative launches', async () => {
+    // Use a hanging spawn so tasks stay in-flight. Task 1 rate-limits on
+    // first call (returns immediately), then hangs on retry. Tasks 2-4 hang.
+    //
+    // With initialLaunchLimit=2: tasks 1+2 launch in burst. Task 1 rate-limits
+    // → enterRateLimitMode runs while active={2}, pending=[3,4].
+    //   Old seed: min(normalLaunches=2, count=4) = 2
+    //   New seed: min(active.size=1 + pending.length=2, count=4) = 3
+    //
+    // With capacity 3 (new), we can have 3 concurrent in-flight tasks in
+    // rate-limit mode. With capacity 2 (old), only 2. We verify by checking
+    // that after tasks 1(retry), 3 are all hanging, task 4 is blocked until
+    // one is released — which requires capacity >= 3.
+    const { spawn: hangSpawn, release, calls: hangCalls } = hangingSpawn()
+    const allCalls: SwarmTask[] = []
+    let task1FirstCall = true
+    const spawn: SpawnFn = async (task, signal) => {
+      allCalls.push(task)
+      if (task.index === 1 && task1FirstCall) {
+        task1FirstCall = false
+        return { agentId: 'agent-1', status: 'failed', state: 'started', error: '429 rate limit', rateLimited: true }
+      }
+      return hangSpawn(task, signal)
+    }
+    const scheduler = new SwarmScheduler(spawn, { initialLaunchLimit: 2 })
+    const promise = run(scheduler, 4)
+    await vi.advanceTimersByTimeAsync(0)
+    // Burst: task 1 (rate-limited) + task 2 (hanging).
+    expect(allCalls).toHaveLength(2)
+
+    // Rate-limit mode: one launch per 3s. Task 1 is at front of pending
+    // (unshifted), eligible at t=3000. It retries at t=3000 → hangs.
+    await vi.advanceTimersByTimeAsync(3100) // t=3100: task 1 retry (hangs)
+    expect(allCalls.filter((t) => t.index === 1).length).toBe(2)
+    // Task 3 launches at next 3s pass.
+    await vi.advanceTimersByTimeAsync(3100) // t=6200: task 3 (hangs)
+    expect(allCalls.filter((t) => t.index === 3).length).toBe(1)
+    // Now active = {2, 1, 3} = 3. With capacity 3, task 4 can't launch yet.
+    // (With old capacity 2, task 3 wouldn't have launched — only 2 active.)
+    await vi.advanceTimersByTimeAsync(3100) // t=9300: task 4 tries but capacity=3, active=3
+    expect(allCalls.filter((t) => t.index === 4).length).toBe(0)
+
+    // Release task 2; now active=2, capacity=3, so task 4 can launch.
+    release(2)
+    await vi.advanceTimersByTimeAsync(3100)
+    expect(allCalls.filter((t) => t.index === 4).length).toBe(1)
+
+    // Clean up.
+    release(1)
+    release(3)
+    release(4)
+    await vi.advanceTimersByTimeAsync(5000)
+    const results = await promise
+    expect(results).toHaveLength(4)
+  })
+})
