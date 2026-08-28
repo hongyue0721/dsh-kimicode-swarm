@@ -8,9 +8,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
+import type { SubagentResult, SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type MessageSource } from '@deepseek-ai/dsh-llm'
 // Type-only: pulls the ctx.commands Context merge.
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -106,6 +106,16 @@ function textOf(result: SubagentResult): string {
     .trim()
 }
 
+/** Extract text from a raw ContentBlock[] (the followup path's lastAssistantMessage). */
+function textOfBlocks(blocks: readonly ContentBlock[] | undefined): string {
+  if (blocks === undefined) return ''
+  return blocks
+    .filter((block) => block.type === 'text')
+    .map((block) => (block.type === 'text' ? block.text : ''))
+    .join('')
+    .trim()
+}
+
 /** Render settled runs in the Kimi-style XML form the model can parse. */
 export function renderSwarmResults(results: readonly SwarmRunResult[]): string {
   const completed = results.filter((r) => r.status === 'completed').length
@@ -128,11 +138,15 @@ export function renderSwarmResults(results: readonly SwarmRunResult[]): string {
   for (const result of results) {
     const agentId = result.agentId === undefined ? '' : ` agent_id="${escapeXml(result.agentId)}"`
     const item = result.task.item === undefined ? '' : ` item="${escapeXml(result.task.item)}"`
+    const type = result.task.type === undefined ? '' : ` type="${escapeXml(result.task.type)}"`
+    const model =
+      result.task.model?.model === undefined ? '' : ` model="${escapeXml(result.task.model.model)}"`
+    const mode = ` mode="${result.task.kind}"`
     const state = result.state === undefined ? '' : ` state="${result.state}"`
     const body =
       result.status === 'completed' ? (result.result ?? '') : (result.error ?? 'unknown error')
     lines.push(
-      `<subagent${agentId}${item}${state} outcome="${result.status}">${body}</subagent>`,
+      `<subagent${agentId}${item}${type}${model}${mode}${state} outcome="${result.status}">${body}</subagent>`,
     )
   }
   lines.push('</agent_swarm_result>')
@@ -330,6 +344,104 @@ function swarmTool(
       }
 
       const spawn = async (task: SwarmTask, signal: AbortSignal) => {
+        // Resume path: deliver a follow-up message to an existing continuable
+        // child and await its settlement via the scoped `subagent/end` event.
+        // `followup` resolves the moment the message is accepted into the
+        // child's inbox — it does NOT wait for the turn to complete, so we listen
+        // for the lifecycle end edge (filtered by child id) and race it against
+        // caller cancellation.
+        if (task.kind === 'resume') {
+          const childId = task.resumeAgentId
+          if (childId === undefined) {
+            return {
+              agentId: undefined,
+              status: 'failed' as const,
+              state: 'not_started' as const,
+              error: 'resume task is missing resumeAgentId',
+            }
+          }
+          try {
+            // Register the end listener BEFORE followup to avoid losing the
+            // edge in the window between acceptance and turn completion.
+            let endInfo: SubagentRunEndInfo | undefined
+            let resolveEnd: (info: SubagentRunEndInfo) => void
+            const ended = new Promise<SubagentRunEndInfo>((resolve) => {
+              resolveEnd = resolve
+            })
+            const off = ctx.on('subagent/end', (info: SubagentRunEndInfo) => {
+              if (info.id === childId && endInfo === undefined) {
+                endInfo = info
+                resolveEnd(info)
+              }
+            })
+            try {
+              await ctx.subagents.followup(
+                exec.agent as never,
+                childId as never,
+                [{ type: 'text', text: task.prompt }],
+                {
+                  source: { kind: 'plugin', plugin: 'dsh-swarm' } as MessageSource,
+                  signal,
+                },
+              )
+              // followup accepted; wait for the child's turn to settle, but bail
+              // out if the caller cancels before the end edge fires.
+              if (signal.aborted) {
+                return {
+                  agentId: childId,
+                  status: 'aborted' as const,
+                  state: 'started' as const,
+                  error: 'The user manually interrupted this swarm before this subagent finished.',
+                }
+              }
+              let onAbort: (() => void) | undefined
+              const aborted = new Promise<void>((resolve) => {
+                if (signal.aborted) {
+                  resolve()
+                  return
+                }
+                onAbort = () => resolve()
+                signal.addEventListener('abort', onAbort, { once: true })
+              })
+              try {
+                const info = await Promise.race([ended, aborted.then(() => undefined)])
+                if (info === undefined) {
+                  // Cancelled before the child settled.
+                  return {
+                    agentId: childId,
+                    status: 'aborted' as const,
+                    state: 'started' as const,
+                    error: 'The user manually interrupted this swarm before this subagent finished.',
+                  }
+                }
+                const completed = info.stopReason === 'completed'
+                const result = textOfBlocks(info.lastAssistantMessage)
+                return {
+                  agentId: childId,
+                  status: completed ? ('completed' as const) : ('failed' as const),
+                  state: 'started' as const,
+                  result: completed ? result : undefined,
+                  error: completed ? undefined : `subagent stopped: ${info.stopReason}`,
+                }
+              } finally {
+                if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+              }
+            } finally {
+              off()
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return {
+              agentId: childId,
+              status: 'failed' as const,
+              state: 'started' as const,
+              error: message,
+              rateLimited: isRateLimitError(message),
+            }
+          }
+        }
+
+        // Spawn path: start a fresh one-shot child and await its result.
         try {
           const run = await ctx.subagents.start(SUBAGENT_PROVIDER, {
             label: task.description,
@@ -397,8 +509,8 @@ function parseResultsXml(xml: string): SwarmRunResult[] {
         kind: attr('mode') === 'resume' ? 'resume' : 'spawn',
         item: attr('item'),
         prompt: '',
-        type: undefined,
-        model: undefined,
+        type: attr('type'),
+        model: attr('model') ? { model: attr('model')! } : undefined,
         resumeAgentId: undefined,
         description: '',
       },
