@@ -1,6 +1,6 @@
 {
   "name": "dsh-kimicode-swarm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness 批量并行子 Agent 调度插件：swarm_batch 工具（Kimi Code Swarm 模式移植）+ /swarm 命令 + 聊天内实时进度条。",
   "repository": {
     "type": "git",
