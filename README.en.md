@@ -14,6 +14,10 @@
   <strong>English</strong> · <a href="./README.md">简体中文</a>
 </p>
 
+<p align="center">
+  <img src="./assets/swarm-banner.en.png" alt="dsh-kimicode-swarm" width="85%" />
+</p>
+
 ---
 
 A port of **Kimi Code Swarm mode** (master/worker parallel multi-agent) into DeepSeek Harness:
