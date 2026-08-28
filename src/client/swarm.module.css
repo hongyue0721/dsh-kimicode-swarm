@@ -1,7 +1,7 @@
 .card {
-  border: 1px solid var(--dsh-border, #e2e5ea);
+  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
-  background: var(--dsh-surface, #ffffff);
+  background: var(--dsw-alias-bg-layer-1);
   overflow: hidden;
   font-size: 13px;
 }
@@ -11,7 +11,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--dsh-border, #e2e5ea);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
 .title {
@@ -19,7 +19,7 @@
 }
 
 .running {
-  color: var(--dsh-accent, #4b7bec);
+  color: var(--dsw-alias-brand-primary);
   font-weight: 500;
 }
 
@@ -30,17 +30,17 @@
 }
 
 .ok {
-  color: #2e8b57;
+  color: var(--dsw-alias-state-success-primary);
   font-style: normal;
 }
 
 .bad {
-  color: #c0392b;
+  color: var(--dsw-alias-state-error-primary);
   font-style: normal;
 }
 
 .muted {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   font-style: normal;
 }
 
@@ -52,13 +52,13 @@
 }
 
 .count {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
 }
 
 .hint {
   padding: 0 12px 10px;
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
 }
 
@@ -83,7 +83,7 @@
 }
 
 .rowHead:hover {
-  background: var(--dsh-hover, #f4f6f8);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .dot {
@@ -94,15 +94,15 @@
 }
 
 .dot.completed {
-  background: #2e8b57;
+  background: var(--dsw-alias-state-success-primary);
 }
 
 .dot.failed {
-  background: #c0392b;
+  background: var(--dsw-alias-state-error-primary);
 }
 
 .dot.aborted {
-  background: #b0b7c3;
+  background: var(--dsw-alias-label-secondary);
 }
 
 .rowItem {
@@ -115,32 +115,32 @@
 
 .rowType,
 .rowModel {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
-  background: var(--dsh-chip, #f0f2f5);
+  background: var(--dsw-alias-bg-layer-2);
   border-radius: 4px;
   padding: 1px 6px;
 }
 
 .rowStatus {
   font-size: 12px;
-  color: #5a6270;
+  color: var(--dsw-alias-label-secondary);
   flex: none;
 }
 
 .rowFailed .rowStatus {
-  color: #c0392b;
+  color: var(--dsw-alias-state-error-primary);
 }
 
 .chevron {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   flex: none;
 }
 
 .rowBody {
   margin: 0 12px 6px 32px;
   padding: 8px 10px;
-  background: var(--dsh-code, #f7f8fa);
+  background: var(--dsw-alias-bg-layer-2);
   border-radius: 6px;
   font-size: 12px;
   white-space: pre-wrap;
@@ -150,9 +150,9 @@
 }
 
 .settingsCard {
-  border: 1px solid var(--dsh-border, #e2e5ea);
+  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
-  background: var(--dsh-surface, #ffffff);
+  background: var(--dsw-alias-bg-layer-1);
   overflow: hidden;
   font-size: 13px;
 }
@@ -170,7 +170,7 @@
 }
 
 .settingsHeader:hover {
-  background: var(--dsh-hover, #f4f6f8);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .settingsName {
@@ -178,7 +178,7 @@
 }
 
 .settingsDescription {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   flex: 1;
 }
@@ -229,23 +229,24 @@
 .mappingType,
 .mappingSelect {
   padding: 4px 6px;
-  border: 1px solid var(--dsh-border, #d5d9e0);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsh-surface, #ffffff);
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
   font-size: 13px;
 }
 
 .iconButton {
   border: 0;
   background: none;
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-size: 16px;
   padding: 2px 6px;
 }
 
 .iconButton:hover {
-  color: #c0392b;
+  color: var(--dsw-alias-state-error-primary);
 }
 
 .actionsRow {
@@ -263,8 +264,10 @@
 }
 
 .primaryButton {
-  background: var(--dsh-accent, #4b7bec);
-  border: 1px solid var(--dsh-accent, #4b7bec);
+  background: var(--dsw-alias-brand-primary);
+  border: 1px solid var(--dsw-alias-brand-primary);
+  /* Brand-primary is a saturated accent color in both themes, so fixed
+     white label text stays readable in light and dark mode alike. */
   color: #ffffff;
 }
 
@@ -275,12 +278,12 @@
 
 .ghostButton {
   background: none;
-  border: 1px solid var(--dsh-border, #d5d9e0);
+  border: 1px solid var(--dsw-alias-border-l2);
   color: inherit;
 }
 
 .catalogError {
-  color: #c0392b;
+  color: var(--dsw-alias-state-error-primary);
   font-size: 12px;
 }
 
@@ -290,23 +293,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--dsh-accent, #4b7bec);
+  color: var(--dsw-alias-brand-primary);
 }
 
 .status-queued {
-  color: #8a919e;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .status-running {
-  color: var(--dsh-accent, #4b7bec);
+  color: var(--dsw-alias-brand-primary);
 }
 
 .dot.queued {
-  background: #b0b7c3;
+  background: var(--dsw-alias-label-secondary);
 }
 
 .dot.running {
-  background: var(--dsh-accent, #4b7bec);
+  background: var(--dsw-alias-brand-primary);
   animation: swarmPulse 1.2s ease-in-out infinite;
 }
 
