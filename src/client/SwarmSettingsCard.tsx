@@ -222,8 +222,8 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
         aria-expanded={open}
         onClick={() => { setOpen(!open) }}
       >
-        <span className={css.settingsName}>Swarm 批量并行</span>
-        <span className={css.settingsDescription}>swarm_batch 工具与模型映射</span>
+        <span className={css.settingsName}>Swarm batch-parallel</span>
+        <span className={css.settingsDescription}>swarm_batch tool and model mapping</span>
         <span className={css.chevron}>{open ? '▾' : '▸'}</span>
       </button>
       {open ? (
@@ -234,7 +234,7 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
               checked={state.enabled}
               onChange={(event) => { actions.setEnabled(event.target.checked) }}
             />
-            启用插件
+            Enable plugin
           </label>
           <label className={css.toggleRow}>
             <input
@@ -242,12 +242,12 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
               checked={state.modelMappingEnabled}
               onChange={(event) => { actions.setMappingEnabled(event.target.checked) }}
             />
-            启用模型映射表（关闭时由 Agent 自由分配模型）
+            Enable the model mapping table (when off, the agent freely assigns the model)
           </label>
 
-          <div className={css.sectionTitle}>类型 → 模型映射</div>
+          <div className={css.sectionTitle}>Type → model mapping</div>
           {state.rows.length === 0 ? (
-            <div className={css.hint}>暂无映射行；添加后按类型命中，未命中回落到继承调用者模型。</div>
+            <div className={css.hint}>No mapping rows yet; once added, they match by type, falling back to inheriting the caller&apos;s model on a miss.</div>
           ) : null}
           <ul className={css.mappingRows}>
             {state.rows.map((row, index) => (
@@ -255,7 +255,7 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
                 <input
                   className={css.mappingType}
                   value={row.type}
-                  placeholder="类型（如 coder）"
+                  placeholder="Type (e.g. coder)"
                   onChange={(event) => { updateRow(index, { type: event.target.value }) }}
                 />
                 <select
@@ -263,7 +263,7 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
                   value={row.provider}
                   onChange={(event) => { updateRow(index, { provider: event.target.value, model: '' }) }}
                 >
-                  <option value="">(默认 provider)</option>
+                  <option value="">(default provider)</option>
                   {state.providers.map((p) => (
                     <option key={p.provider} value={p.provider}>{p.displayName}</option>
                   ))}
@@ -273,17 +273,17 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
                   value={row.model}
                   onChange={(event) => { updateRow(index, { model: event.target.value }) }}
                 >
-                  <option value="">(选择模型)</option>
+                  <option value="">(select a model)</option>
                   {modelsOf(row.provider).map((m) => (
                     <option key={`${m.provider}:${m.id}`} value={m.id}>
-                      {m.name}（{providerName(m.provider)}）
+                      {m.name} ({providerName(m.provider)})
                     </option>
                   ))}
                 </select>
                 <button
                   type="button"
                   className={css.iconButton}
-                  aria-label="删除该行"
+                  aria-label="Delete this row"
                   onClick={() => { actions.setRows(state.rows.filter((_, i) => i !== index)) }}
                 >
                   ×
@@ -300,7 +300,7 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
                 actions.setRows([...state.rows, { type: '', provider: '', model: '' }])
               }}
             >
-              + 添加映射
+              + Add mapping
             </button>
             <button
               type="button"
@@ -308,7 +308,7 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
               disabled={state.saving}
               onClick={() => { void actions.saveRows() }}
             >
-              {state.saving ? '保存中…' : '保存映射'}
+              {state.saving ? 'Saving…' : 'Save mapping'}
             </button>
             <button
               type="button"
@@ -316,18 +316,18 @@ export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JS
               disabled={state.catalogLoading}
               onClick={() => { void actions.refreshCatalog() }}
             >
-              {state.catalogLoading ? '拉取中…' : '刷新模型目录'}
+              {state.catalogLoading ? 'Fetching…' : 'Refresh model catalog'}
             </button>
           </div>
 
           {state.catalogError !== null ? (
-            <div className={css.catalogError}>模型目录拉取失败：{state.catalogError}</div>
+            <div className={css.catalogError}>Failed to fetch the model catalog: {state.catalogError}</div>
           ) : null}
-          {state.saveFailed ? <div className={css.catalogError}>保存失败，请重试</div> : null}
+          {state.saveFailed ? <div className={css.catalogError}>Save failed, please retry</div> : null}
           {!state.catalogLoading && state.catalogError === null && state.providers.length > 0 ? (
             <div className={css.hint}>
-              已从宿主拉取 {state.providers.length} 个供应商、{state.models.length} 个模型；
-              模型列表随供应商配置变更自动刷新。
+              Fetched {state.providers.length} provider(s) and {state.models.length} model(s) from the host;
+              the model list refreshes automatically as provider configuration changes.
             </div>
           ) : null}
         </div>
