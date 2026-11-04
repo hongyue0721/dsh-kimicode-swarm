@@ -54,14 +54,10 @@
 已在 DeepSeek Harness **0.2.1-rc.5** 上验证。DSH 的插件接口还在快速变化，其他版本未经测试；0.2.0 之前的版本不支持 0.2.1。
 
 ```bash
-dsh plugin --profile web add dsh-kimicode-swarm
+dsh plugin --profile web add https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest/download/dsh-kimicode-swarm.tgz
 ```
 
-也可以从 [GitHub Release](https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest) 下载 `dsh-kimicode-swarm.tgz` 安装：
-
-```bash
-dsh plugin --profile web add "file:$PWD/dsh-kimicode-swarm.tgz"
-```
+这条命令从 [GitHub Release](https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest) 安装最新版。npm 上的 `dsh-kimicode-swarm` 目前还是不兼容的 0.1.2，请先不要按包名安装。
 
 重启 `dsh web`，在新会话里试试：
 
