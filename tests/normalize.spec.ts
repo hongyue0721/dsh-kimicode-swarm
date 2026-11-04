@@ -142,3 +142,41 @@ describe('normalizeSwarmArgs', () => {
     ).toThrow(SwarmArgsError)
   })
 })
+
+describe('fork normalization', () => {
+  it('creates context-seeded tasks without resolving model mappings', () => {
+    const resolver = { resolve: () => { throw new Error('mapping must not run for fork') } }
+    const { tasks } = normalizeSwarmArgs({ ...baseArgs, fork: true }, resolver)
+    expect(tasks.map((task) => task.kind)).toEqual(['fork', 'fork'])
+    expect(tasks.map((task) => task.model)).toEqual([undefined, undefined])
+    expect(tasks.map((task) => task.agentPreset)).toEqual([undefined, undefined])
+  })
+  it.each([
+    { resume_agent_ids: { child: 'continue' } }, { resume_agent_ids: {} },
+    { model: 'm' }, { model: '' }, { subagent_type: 'coder' }, { subagent_type: '' },
+    { items: [{ item: 'a', model: 'm' }, 'b'] }, { items: [{ item: 'a', model: '' }, 'b'] },
+    { items: [{ item: 'a', type: 'review' }, 'b'] }, { items: [{ item: 'a', type: '' }, 'b'] },
+  ] as Array<Partial<SwarmToolArgs>>)('rejects conflicting fork arguments: %j', (override) => {
+    expect(() => normalizeSwarmArgs({ ...baseArgs, ...override, fork: true }, explicitOnlyResolver())).toThrow(/fork/)
+  })
+  it('uses an injected preset resolver only for explicitly supplied spawn types', () => {
+    const seen: string[] = []
+    const { tasks } = normalizeSwarmArgs({ ...baseArgs, items: ['a', { item: 'b', type: 'review' }] }, explicitOnlyResolver(), {
+      resolve: (type) => { seen.push(type); return 'preset-review' },
+    })
+    expect(seen).toEqual(['review'])
+    expect(tasks[0].agentPreset).toBeUndefined()
+    expect(tasks[1].agentPreset).toBe('preset-review')
+  })
+})
+
+describe('missing input facts', () => {
+  it.each([
+    { subagent_type: '   ' }, { model: ' ' }, { items: [{ item: 'a', type: ' ' }, 'b'] },
+  ] as Array<Partial<SwarmToolArgs>>)('rejects an explicitly empty model or type: %j', (override) => {
+    expect(() => normalizeSwarmArgs({ ...baseArgs, ...override }, explicitOnlyResolver())).toThrow('must be non-empty when provided')
+  })
+  it('rejects non-string resume prompts instead of coercing them', () => {
+    expect(() => normalizeSwarmArgs({ description: 'resume', resume_agent_ids: { child: null } } as any, explicitOnlyResolver())).toThrow('must be a string prompt')
+  })
+})

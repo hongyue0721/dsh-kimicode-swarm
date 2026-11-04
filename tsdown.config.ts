@@ -15,7 +15,9 @@ export default clientBundle('dsh-kimicode-swarm', ['src/index.ts'], {
   libExternal: [
     '@deepseek-ai/dsh-tools',
     '@deepseek-ai/dsh-subagent',
-    '@deepseek-ai/dsh-settings',
     '@deepseek-ai/dsh-commands',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-session',
+    '@deepseek-ai/schemastery',
   ],
 })

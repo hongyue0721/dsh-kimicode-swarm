@@ -1,0 +1,27 @@
+/** Strict plugin record folding and reload compatibility without an LLM or web server. */
+import { describe, expect, it } from 'vitest'
+import { Session, SessionId, appendPluginRecord } from '@deepseek-ai/dsh-session'
+import { foldMode, initialMode, MODE_RECORD, parseMode } from '../src/swarm-mode.ts'
+
+describe('mode record fold', () => {
+  it('validates mode invariants instead of supplying missing facts', () => {
+    for (const value of [{}, { active: true, trigger: null, everActive: true }, { active: false, trigger: 'manual', everActive: true }, { active: true, trigger: 'task', everActive: false }, null]) {
+      expect(() => parseMode(value)).toThrow('Invalid swarm mode record')
+    }
+  })
+  it('round-trips ignorable plugin records through JSON and restores the same state', () => {
+    const session = Session.create(SessionId('mode-round-trip'))
+    appendPluginRecord(session, MODE_RECORD, { active: true, trigger: 'manual', everActive: true })
+    const events = JSON.parse(JSON.stringify(session.snapshotEvents()))
+    const restored = Session.create(SessionId('restored-mode'), events)
+    expect(events[0].ignorable).toBe(true)
+    expect(restored.snapshotEvents().reduce(foldMode, initialMode())).toEqual({ active: true, trigger: 'manual', everActive: true })
+  })
+  it('preserves the state reference for unrelated events', () => {
+    const session = Session.create(SessionId('unrelated'))
+    appendPluginRecord(session, 'plugin:dsh-kimicode-swarm/mode', { active: false, trigger: null, everActive: false })
+    const state = initialMode()
+    const unrelated = { ...session.snapshotEvents()[0], type: 'plugin:another-plugin/record' } as any
+    expect(foldMode(state, unrelated)).toBe(state)
+  })
+})

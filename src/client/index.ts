@@ -4,96 +4,119 @@
  * Registers two surfaces:
  * 1. A keyed `tool.call.toolview` view for `swarm_batch` calls: the in-chat
  *    swarm panel (per-subagent status rows, expandable results).
- * 2. A plugin settings card (`settings.plugin.item`, keyed by the `swarm`
- *    namespace) editing the swarm settings namespace: master switches plus
- *    the type -> model mapping table, with provider/model options pulled live
- *    from the host's `llm.models` catalog.
+ * 2. The plugin's configuration page (`plugins.bundle.config`, keyed by the
+ *    package name) editing the type -> model mapping table, with provider/model
+ *    options pulled live from the host's model catalog.
  */
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import { NS, zh, en } from './locales.ts'
+import { SwarmBadge } from './SwarmBadge.tsx'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-// Type-only: pulls the settings-surface Context merge (ctx.settingsScope).
+// Type-only: pulls the slot registry Context merge (ctx.slots).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: pulls the session Remote namespace merge (ctx.remote.session).
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+// Type-only: pulls the configuration-form Context merge (ctx.configForms).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the 'tool.call.toolview' SlotMap merge.
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
-// Type-only: pulls the 'settings.plugin.item' keyed-slot contract.
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { SwarmProgressEntry } from '../core/scheduler.ts'
-import { SwarmCard, type SwarmCardProps } from './SwarmCard.tsx'
+// Type-only: pulls the 'plugins.bundle.config' SlotMap merge.
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+import { SwarmCard } from './SwarmCard.tsx'
 import {
   SwarmSettingsCard,
   SwarmSettingsCardController,
   type SwarmSettings,
-  type SwarmSettingsCardFace,
 } from './SwarmSettingsCard.tsx'
-import { publishSwarmProgress, SWARM_PROGRESS_ROUTE } from './progress-store.ts'
+import { openProgressStream } from './progress-stream.ts'
 
 export type { SwarmCardProps } from './SwarmCard.tsx'
 export type { SwarmSettings, SwarmSettingsCardFace } from './SwarmSettingsCard.tsx'
 
-/** Services required by this plugin. The settings scope binder requires the
- * caller to inject `connection` (transport) and `remote` (forwarded settings
- * invalidation) — see dsh-client-ui-settings settings-scope docs. */
-export const inject = ['slots', 'settingsScope', 'connection']
+/** Package name: keys this plugin's page on the Plugins page. */
+const PACKAGE_NAME = 'dsh-kimicode-swarm'
 
-/**
- * Open an EventSource to the host's /swarm-events route and forward every
- * progress frame into the module store, so running SwarmCard components get
- * live per-subagent status. The stream lives for the plugin lifetime; the
- * card reads the store.
- */
-function startProgressStream(ctx: ClientContext): void {
-  // The web UI and the host webserver are same-origin (the browser loaded the
-  // UI from it), so a relative URL reaches the route without knowing the
-  // host/port. On the Electron IPC bridge this resolves against the harness
-  // origin as well; if the origin is unavailable the stream simply stays
-  // closed and the card renders settled results only.
-  const source = new EventSource(SWARM_PROGRESS_ROUTE)
-  source.addEventListener('progress', (event) => {
-    try {
-      const frame = JSON.parse((event as MessageEvent).data) as {
-        callId: string
-        subagents: SwarmProgressEntry[]
-      }
-      publishSwarmProgress(frame.callId, frame.subagents)
-    } catch {
-      // Malformed frames are dropped; the next frame overwrites the store.
-    }
-  })
-  source.onerror = () => {
-    // The host may have no web server or the route may be unregistered.
-    // Close to prevent silent infinite reconnection; the card falls back
-    // to settled-only rendering without live progress.
-    source.close()
-  }
-  ctx.effect(() => () => source.close(), 'dsh-swarm: progress sse')
-}
+/** Profile entry id declared by cordis.patch.yml; names the settings namespace. */
+const SETTINGS_ENTRY_ID = 'dsh-kimicode-swarm'
+
+/** Services required by this plugin. */
+export const inject = ['slots', 'configForms', 'remote', 'remote.session', 'remote.commands', 'locale']
 
 /** Register the swarm surfaces. */
-export function apply(ctx: ClientContext & Context): void {
-  startProgressStream(ctx)
+export function apply(ctx: Context): void {
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-swarm: dictionaries')
+  ctx.effect(() => openProgressStream(), 'dsh-swarm: progress sse')
 
   // In-chat swarm panel: own how swarm_batch calls render inside a turn.
   ctx.slots.inject('tool.call.toolview', () =>
-    ctx.slots.register({ name: 'tool.call.toolview', key: 'swarm_batch' }, SwarmCard),
+    ctx.slots.register({ name: 'tool.call.toolview', key: 'swarm_batch', locale: NS, inject: (sessionId) => ({
+      swarmSessionId: sessionId, ...childNavigation(ctx, sessionId),
+    }) }, SwarmCard),
   )
 
-  // Plugin settings card bound to the `swarm` namespace, keyed by that
-  // namespace exactly like the official shell/agent-loop/web-search cards.
-  const settingsScope = ctx.settingsScope.bind<SwarmSettings>({ namespace: 'swarm' })
-  const controller = new SwarmSettingsCardController(settingsScope, () => {
-    const connection = ctx.get('connection') as ConnectionHandle | undefined
-    return connection?.api
-  })
-  ctx.slots.inject('settings.plugin.item', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.plugin.item',
-        key: 'swarm',
-        registrant: 'dsh-swarm',
-        inject: () => controller.inject(),
+  ctx.slots.inject('conversation.input.left', () =>
+    ctx.slots.register({ name: 'conversation.input.left', id: 'kimicode-swarm', locale: NS, inject: (sessionId) => ({
+      swarmSessionId: sessionId,
+      disableMode: async () => {
+        const result = await ctx.remote.commands.execute(sessionId as SessionId, '/swarm off', [])
+        if (!result.ok) throw new Error(result.error.message)
+        if (result.value === undefined) throw new Error(ctx.locale.bind(NS)('commandUnavailable'))
+        if (result.value.result.kind === 'error') throw new Error(result.value.result.text)
       },
-      SwarmSettingsCard,
-    ),
+    }) }, SwarmBadge),
   )
+
+  // Presets only offer input suggestions, and a profile may compose no registry.
+  let listPresets: Context['remote']['agentPresets']['list'] | undefined
+  ctx.inject(['remote.agentPresets'], (scope) => {
+    listPresets = () => scope.remote.agentPresets.list()
+    scope.effect(() => () => { listPresets = undefined }, 'dsh-swarm: preset suggestions')
+  })
+
+  const controller = new SwarmSettingsCardController(
+    ctx.configForms.get<SwarmSettings>(SETTINGS_ENTRY_ID),
+    async () => {
+      const reply = await ctx.remote.session.modelCatalog()
+      if (!reply.ok) throw new Error(reply.error.message)
+      return reply.value
+    },
+    async () => {
+      if (listPresets === undefined) return []
+      const result = await listPresets()
+      if (!result.ok) {
+        if (result.error.code === 'gateway/invocation-unavailable') return []
+        throw new Error(result.error.message)
+      }
+      return result.value.presets.map((preset) => preset.id)
+    },
+  )
+  ctx.effect(() => () => { controller.dispose() }, 'dsh-swarm: settings form')
+  ctx.effect(
+    () =>
+      ctx.configForms.whileServed([SETTINGS_ENTRY_ID], () =>
+        ctx.slots.inject('plugins.bundle.config', () =>
+          ctx.slots.register(
+            { name: 'plugins.bundle.config', key: PACKAGE_NAME, locale: NS, inject: () => controller.inject() },
+            SwarmSettingsCard,
+          ),
+        ),
+      ),
+    'dsh-swarm: settings page',
+  )
+}
+
+/** Match the host subagent UI's durable parent/child address. */
+function childNavigation(ctx: Context, parentSessionId: string): { openAgent?: (id: string) => void } {
+  const workspace = ctx.get('uiWorkspace')
+  const sidebar = ctx.get('sidebarRight')
+  if (workspace === undefined && sidebar === undefined) return {}
+  return { openAgent: (id) => {
+    const address = { parentSessionId: parentSessionId as SessionId, childSessionId: id as SessionId, mode: 'continuable' as const }
+    if (workspace !== undefined) workspace.openSession(address)
+    else sidebar!.openResource(`dsh-resource://subagentchat/session/${encodeURIComponent(id)}?${new URLSearchParams({ parent: parentSessionId, mode: 'continuable' })}`, { kind: 'subagentchat', preferNewPane: true })
+  } }
 }

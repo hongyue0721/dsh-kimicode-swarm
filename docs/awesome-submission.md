@@ -1,4 +1,6 @@
-# awesome-dsh-plugin 收录 PR 文案（Workflow & Automation / 工作流与自动化）
+# awesome-dsh-plugin 收录记录
+
+条目现在维护在该仓库的 `data/plugins/hongyue0721__dsh-kimicode-swarm.yml`。下面是首次收录时的 PR 文案。
 
 ## README.md（英文，加到 Workflow & Automation 分类末尾）
 

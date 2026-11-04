@@ -1,337 +1,190 @@
-/**
- * Swarm plugin settings card: master switches plus the type -> model mapping
- * table. Provider and model options are pulled live from the host's `llm`
- * catalog (`llm.providers` / `llm.models`), the same RPCs the official model
- * picker uses, so the table always shows what the host can actually serve.
- *
- * Deliberately simpler than the staged CardForm: writes land immediately via
- * `SettingsScope.set` (the namespace is `live`-applies), and the model catalog
- * is refreshed on demand instead of on every keystroke.
- */
-import { useEffect, useState, type JSX } from 'react'
-import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
-import type { SettingsScope, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+/** Native settings controls; mapping drafts survive unrelated setting updates. */
+import { useEffect, useId, useState, type JSX } from 'react'
+import { Button, Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { DEFAULT_MAX_CONCURRENCY, DEFAULT_REQUIRE_SWARM_MODE, DEFAULT_SWARM_TIMEOUT_MS } from '../defaults.ts'
+import { NS, type SwarmTranslate } from './locales.ts'
 import css from './swarm.module.css'
 
-/** The namespace's full shape (mirrors the host Config schema). */
 export interface SwarmSettings {
-  enabled?: boolean
-  announceToAgent?: boolean
-  modelMappingEnabled?: boolean
-  modelMapping?: Array<{ type: string; provider: string; model: string }>
+  requireSwarmMode?: boolean; timeoutMs?: number; maxConcurrency?: number
+  modelMappingEnabled?: boolean; modelMapping?: SwarmMappingRow[]
 }
-
-/** One mapping row as the card edits it. */
-export interface SwarmMappingRow {
-  type: string
-  provider: string
-  model: string
-}
-
-/** Provider option from `llm.providers`. */
-export interface SwarmProviderOption {
-  provider: string
-  displayName: string
-}
-
-/** Model option from `llm.models` (group-flattened). */
-export interface SwarmModelOption {
-  provider: string
-  id: string
-  name: string
-}
-
-/** Card snapshot state. */
+export interface SwarmMappingRow { type: string; provider: string; model: string }
+export interface SwarmProviderOption { provider: string; displayName: string }
+export interface SwarmModelOption { provider: string; id: string; name: string }
 export interface SwarmSettingsCardState {
-  /** Whether the settings namespace is served to this client. */
-  available: boolean
-  enabled: boolean
-  modelMappingEnabled: boolean
-  rows: SwarmMappingRow[]
-  /** Model catalog pulled from the host; empty until loaded. */
-  providers: SwarmProviderOption[]
-  models: SwarmModelOption[]
-  catalogLoading: boolean
-  catalogError: string | null
-  /** Whether a save is crossing the wire. */
-  saving: boolean
-  /** Whether the last save failed. */
-  saveFailed: boolean
+  available: boolean; requireSwarmMode: boolean; timeoutMs: number; maxConcurrency: number
+  modelMappingEnabled: boolean; rows: SwarmMappingRow[]; dirty: boolean; invalidRows: number[]
+  providers: SwarmProviderOption[]; models: SwarmModelOption[]; presets: string[]
+  catalogLoading: boolean; catalogError: string | null; saving: boolean; saveError: { kind: 'refused' } | { kind: 'error'; message: string } | null
 }
-
-/** The actions the card's slot entry injects. */
 export interface SwarmSettingsCardActions {
-  setEnabled: (value: boolean) => void
-  setMappingEnabled: (value: boolean) => void
-  setRows: (rows: SwarmMappingRow[]) => void
-  saveRows: () => Promise<void>
-  refreshCatalog: () => Promise<void>
+  setMappingEnabled(value: boolean): void; setRows(rows: SwarmMappingRow[]): void
+  setRequireMode(value: boolean): void; setTimeoutMinutes(value: number): void; setMaxConcurrency(value: number): void
+  saveRows(): Promise<void>; refreshCatalog(): Promise<void>
 }
-
-/** Registration-side face for the card component. */
-export interface SwarmSettingsCardFace {
-  state: SwarmSettingsCardState
-  actions: SwarmSettingsCardActions
+export interface SwarmSettingsCardFace extends SwarmSettingsCardActions {
+  hooks: { swarmSettings: SnapshotStore<SwarmSettingsCardState> }
 }
+export type SwarmSettingsCardProps = PropsRuntime<'plugins.bundle.config'> & InjectFace<SwarmSettingsCardFace> & PropsLocale<typeof NS>
+const sameRows = (a: SwarmMappingRow[], b: SwarmMappingRow[]): boolean => JSON.stringify(a) === JSON.stringify(b)
+const invalidRows = (rows: SwarmMappingRow[]): number[] => rows.flatMap((row, i) => row.type.trim() === '' || row.model.trim() === '' ? [i] : [])
 
-/** Controller bridging the `swarm` namespace and the host model catalog. */
 export class SwarmSettingsCardController {
   private readonly store: SnapshotStore<SwarmSettingsCardState>
-  private readonly scope: SettingsScope<SwarmSettings>
-  private readonly getApi: () => IApiClient | undefined
+  private readonly unsubscribe: () => void
   private rowsDraft: SwarmMappingRow[]
-  private providersCache: SwarmProviderOption[] = []
-  private modelsCache: SwarmModelOption[] = []
+  private dirty = false
+  private providers: SwarmProviderOption[] = []
+  private models: SwarmModelOption[] = []
+  private presets: string[] = []
   private catalogLoading = false
   private catalogError: string | null = null
   private saving = false
-  private saveFailed = false
+  private saveError: { kind: 'refused' } | { kind: 'error'; message: string } | null = null
 
-  constructor(scope: SettingsScope<SwarmSettings>, getApi: () => IApiClient | undefined) {
-    this.scope = scope
-    this.getApi = getApi
-    this.rowsDraft = []
-    const snapshot = scope.getSnapshot()
-    if (snapshot.status === 'ready') {
-      this.rowsDraft = (snapshot.value?.modelMapping ?? []).map((row) => ({ ...row }))
-    }
-    this.store = createSnapshotStore<SwarmSettingsCardState>(this.project())
-    scope.subscribe(() => {
-      const current = scope.getSnapshot()
-      if (current.status === 'ready') {
-        this.rowsDraft = (current.value?.modelMapping ?? []).map((row) => ({ ...row }))
-      }
-      this.store.set(this.project())
+  constructor(private readonly scope: ConfigForm<SwarmSettings>, private readonly fetchCatalog: () => Promise<ModelCatalog>,
+    private readonly fetchPresets?: () => Promise<string[]>) {
+    this.rowsDraft = this.savedRows()
+    this.store = createSnapshotStore(this.project())
+    this.unsubscribe = scope.subscribe(() => {
+      if (!this.dirty) this.rowsDraft = this.savedRows()
+      this.dirty = !sameRows(this.rowsDraft, this.savedRows())
+      this.emit()
     })
   }
-
+  dispose(): void { this.unsubscribe() }
   private value(): SwarmSettings | undefined {
     const snapshot = this.scope.getSnapshot()
     return snapshot.status === 'ready' ? snapshot.value : undefined
   }
-
+  private savedRows(): SwarmMappingRow[] { return (this.value()?.modelMapping ?? []).map((row) => ({ ...row })) }
   private project(): SwarmSettingsCardState {
     const value = this.value()
     return {
-      available: this.scope.getSnapshot().status !== 'unavailable',
-      enabled: value?.enabled ?? true,
-      modelMappingEnabled: value?.modelMappingEnabled ?? false,
-      rows: this.rowsDraft.map((row) => ({ ...row })),
-      providers: this.providersCache,
-      models: this.modelsCache,
-      catalogLoading: this.catalogLoading,
-      catalogError: this.catalogError,
-      saving: this.saving,
-      saveFailed: this.saveFailed,
+      available: this.scope.getSnapshot().status === 'ready',
+      requireSwarmMode: value?.requireSwarmMode ?? DEFAULT_REQUIRE_SWARM_MODE,
+      timeoutMs: value?.timeoutMs ?? DEFAULT_SWARM_TIMEOUT_MS,
+      maxConcurrency: value?.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
+      modelMappingEnabled: value?.modelMappingEnabled ?? false, rows: this.rowsDraft.map((row) => ({ ...row })),
+      dirty: this.dirty, invalidRows: invalidRows(this.rowsDraft), providers: this.providers, models: this.models, presets: this.presets,
+      catalogLoading: this.catalogLoading, catalogError: this.catalogError, saving: this.saving, saveError: this.saveError,
     }
   }
-
-  /** Face for the card slot entry. */
+  private emit(): void { this.store.set(this.project()) }
+  private async write(field: keyof SwarmSettings, value: unknown): Promise<void> {
+    this.saving = true; this.saveError = null; this.emit()
+    try {
+      if (!await this.scope.set(field, value)) this.saveError = { kind: 'refused' }
+    } catch (error) { this.saveError = { kind: 'error', message: error instanceof Error ? error.message : String(error) } }
+    finally { this.saving = false; this.emit() }
+  }
+  private async saveRows(): Promise<void> {
+    if (invalidRows(this.rowsDraft).length > 0) { this.emit(); return }
+    const draft = this.rowsDraft
+    const normalized = draft.map((row) => ({ type: row.type.trim(), provider: row.provider.trim(), model: row.model.trim() }))
+    await this.write('modelMapping', normalized)
+    if (this.saveError === null && this.rowsDraft === draft) this.rowsDraft = normalized
+    this.dirty = !sameRows(this.rowsDraft, this.savedRows()); this.emit()
+  }
+  private async refreshCatalog(): Promise<void> {
+    this.catalogLoading = true; this.catalogError = null; this.emit()
+    try {
+      const catalog = await this.fetchCatalog()
+      this.providers = catalog.groups.map((group) => ({ provider: group.id, displayName: group.name }))
+      this.models = catalog.groups.flatMap((group) => group.models.map((model) => ({ provider: group.id, id: model.id, name: model.name })))
+      if (catalog.failures.length) this.catalogError = catalog.failures.map((failure) => `${failure.name}: ${failure.message}`).join('; ')
+      this.presets = this.fetchPresets === undefined ? [] : await this.fetchPresets()
+    } catch (error) { this.catalogError = error instanceof Error ? error.message : String(error) }
+    finally { this.catalogLoading = false; this.emit() }
+  }
   inject(): SwarmSettingsCardFace {
     return {
-      state: this.store.getSnapshot(),
-      actions: {
-        setEnabled: (value) => { void this.scope.set('enabled', value) },
-        setMappingEnabled: (value) => { void this.scope.set('modelMappingEnabled', value) },
-        setRows: (rows) => {
-          this.rowsDraft = rows.map((row) => ({ ...row }))
-          this.store.set(this.project())
-        },
-        saveRows: async () => {
-          this.saving = true
-          this.saveFailed = false
-          this.store.set(this.project())
-          try {
-            await this.scope.set('modelMapping', this.rowsDraft)
-          } catch {
-            this.saveFailed = true
-          } finally {
-            this.saving = false
-            this.store.set(this.project())
-          }
-        },
-        refreshCatalog: async () => {
-          this.catalogLoading = true
-          this.catalogError = null
-          this.store.set(this.project())
-          try {
-            await this.loadCatalog()
-          } catch (error) {
-            this.catalogError = error instanceof Error ? error.message : String(error)
-          } finally {
-            this.catalogLoading = false
-            this.store.set(this.project())
-          }
-        },
-      },
+      hooks: { swarmSettings: this.store },
+      setMappingEnabled: (value) => { void this.write('modelMappingEnabled', value) },
+      setRequireMode: (value) => { void this.write('requireSwarmMode', value) },
+      setTimeoutMinutes: (value) => { void this.write('timeoutMs', value * 60_000) },
+      setMaxConcurrency: (value) => { void this.write('maxConcurrency', value) },
+      setRows: (rows) => { this.rowsDraft = rows.map((row) => ({ ...row })); this.dirty = !sameRows(this.rowsDraft, this.savedRows()); this.emit() },
+      saveRows: () => this.saveRows(), refreshCatalog: () => this.refreshCatalog(),
     }
-  }
-
-  private async loadCatalog(): Promise<void> {
-    const api = this.getApi()
-    if (api === undefined) throw new Error('host connection unavailable')
-    const [providersReply, modelsReply] = await Promise.all([api.llm.providers({}), api.llm.models({})])
-    const providers: SwarmProviderOption[] = []
-    if (providersReply.result.ok) {
-      for (const view of providersReply.result.value.providers) {
-        providers.push({ provider: view.provider, displayName: view.displayName })
-      }
-    }
-    const models: SwarmModelOption[] = []
-    if (modelsReply.result.ok) {
-      for (const group of modelsReply.result.value.groups) {
-        for (const model of group.models) {
-          models.push({ provider: group.id, id: model.id, name: model.name })
-        }
-      }
-    }
-    this.providersCache = providers
-    this.modelsCache = models
   }
 }
 
-/** Render the swarm settings card. */
-export function SwarmSettingsCard({ state, actions }: SwarmSettingsCardFace): JSX.Element | null {
-  const [open, setOpen] = useState(false)
-  const [catalogTouched, setCatalogTouched] = useState(false)
+function NumberSetting({ value, onSave, label, hint, integer, t }: {
+  value: number; onSave(value: number): void; label: string; hint: string; integer: boolean; t: SwarmTranslate
+}): JSX.Element {
+  const [text, setText] = useState(String(value))
+  const [error, setError] = useState(false)
+  const id = useId()
+  useEffect(() => { setText(String(value)) }, [value])
+  return <div className={css.numberSetting}>
+    <label htmlFor={id}>{label}</label>
+    <Input id={id} type="number" min="0" step={integer ? '1' : 'any'} value={text} aria-invalid={error}
+      onChange={(event) => setText(event.target.value)} onBlur={() => {
+        const number = Number(text)
+        const valid = text.trim() !== '' && Number.isFinite(number) && number >= 0 &&
+          (integer ? Number.isSafeInteger(number) : Number.isSafeInteger(number * 60_000))
+        setError(!valid)
+        if (valid && number !== value) onSave(number)
+      }} />
+    <span className={error ? css.bad : css.hint}>{error ? t('invalidNumber') : hint}</span>
+  </div>
+}
 
-  useEffect(() => {
-    if (!open || catalogTouched) return
-    setCatalogTouched(true)
-    void actions.refreshCatalog()
-  }, [open, catalogTouched, actions])
+/** Switch's label is only its accessible name, so the row shows the text itself. */
+function SwitchRow(props: { label: string; checked: boolean; disabled: boolean; onChange: (next: boolean) => void }): JSX.Element {
+  return <div className={css.switchRow}><span>{props.label}</span><Switch {...props} /></div>
+}
 
+export function SwarmSettingsCard(props: SwarmSettingsCardProps): JSX.Element | null {
+  const { useSwarmSettings, t, setRows, saveRows, refreshCatalog } = props
+  const state = useSwarmSettings((snapshot) => snapshot)
+  const datalist = useId()
+  useEffect(() => { void refreshCatalog() }, [refreshCatalog])
   if (!state.available) return null
-
-  const providerName = (provider: string): string =>
-    state.providers.find((p) => p.provider === provider)?.displayName ?? provider
-  const modelsOf = (provider: string): SwarmModelOption[] =>
-    provider.length === 0 ? state.models : state.models.filter((m) => m.provider === provider)
-
-  const updateRow = (index: number, patch: Partial<SwarmMappingRow>): void => {
-    const next = state.rows.map((row, i) => (i === index ? { ...row, ...patch } : row))
-    actions.setRows(next)
-  }
-
-  return (
-    <li className={css.settingsCard}>
-      <button
-        type="button"
-        className={css.settingsHeader}
-        aria-expanded={open}
-        onClick={() => { setOpen(!open) }}
-      >
-        <span className={css.settingsName}>Swarm batch-parallel</span>
-        <span className={css.settingsDescription}>swarm_batch tool and model mapping</span>
-        <span className={css.chevron}>{open ? '▾' : '▸'}</span>
-      </button>
-      {open ? (
-        <div className={css.settingsBody}>
-          <label className={css.toggleRow}>
-            <input
-              type="checkbox"
-              checked={state.enabled}
-              onChange={(event) => { actions.setEnabled(event.target.checked) }}
-            />
-            Enable plugin
-          </label>
-          <label className={css.toggleRow}>
-            <input
-              type="checkbox"
-              checked={state.modelMappingEnabled}
-              onChange={(event) => { actions.setMappingEnabled(event.target.checked) }}
-            />
-            Enable the model mapping table (when off, the agent freely assigns the model)
-          </label>
-
-          <div className={css.sectionTitle}>Type → model mapping</div>
-          {state.rows.length === 0 ? (
-            <div className={css.hint}>No mapping rows yet; once added, they match by type, falling back to inheriting the caller&apos;s model on a miss.</div>
-          ) : null}
-          <ul className={css.mappingRows}>
-            {state.rows.map((row, index) => (
-              <li key={index} className={css.mappingRow}>
-                <input
-                  className={css.mappingType}
-                  value={row.type}
-                  placeholder="Type (e.g. coder)"
-                  onChange={(event) => { updateRow(index, { type: event.target.value }) }}
-                />
-                <select
-                  className={css.mappingSelect}
-                  value={row.provider}
-                  onChange={(event) => { updateRow(index, { provider: event.target.value, model: '' }) }}
-                >
-                  <option value="">(default provider)</option>
-                  {state.providers.map((p) => (
-                    <option key={p.provider} value={p.provider}>{p.displayName}</option>
-                  ))}
-                </select>
-                <select
-                  className={css.mappingSelect}
-                  value={row.model}
-                  onChange={(event) => { updateRow(index, { model: event.target.value }) }}
-                >
-                  <option value="">(select a model)</option>
-                  {modelsOf(row.provider).map((m) => (
-                    <option key={`${m.provider}:${m.id}`} value={m.id}>
-                      {m.name} ({providerName(m.provider)})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className={css.iconButton}
-                  aria-label="Delete this row"
-                  onClick={() => { actions.setRows(state.rows.filter((_, i) => i !== index)) }}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          <div className={css.actionsRow}>
-            <button
-              type="button"
-              className={css.primaryButton}
-              onClick={() => {
-                actions.setRows([...state.rows, { type: '', provider: '', model: '' }])
-              }}
-            >
-              + Add mapping
-            </button>
-            <button
-              type="button"
-              className={css.primaryButton}
-              disabled={state.saving}
-              onClick={() => { void actions.saveRows() }}
-            >
-              {state.saving ? 'Saving…' : 'Save mapping'}
-            </button>
-            <button
-              type="button"
-              className={css.ghostButton}
-              disabled={state.catalogLoading}
-              onClick={() => { void actions.refreshCatalog() }}
-            >
-              {state.catalogLoading ? 'Fetching…' : 'Refresh model catalog'}
-            </button>
-          </div>
-
-          {state.catalogError !== null ? (
-            <div className={css.catalogError}>Failed to fetch the model catalog: {state.catalogError}</div>
-          ) : null}
-          {state.saveFailed ? <div className={css.catalogError}>Save failed, please retry</div> : null}
-          {!state.catalogLoading && state.catalogError === null && state.providers.length > 0 ? (
-            <div className={css.hint}>
-              Fetched {state.providers.length} provider(s) and {state.models.length} model(s) from the host;
-              the model list refreshes automatically as provider configuration changes.
-            </div>
-          ) : null}
+  const updateRow = (index: number, patch: Partial<SwarmMappingRow>): void => setRows(state.rows.map((row, i) => i === index ? { ...row, ...patch } : row))
+  return <div className={css.settingsBody}>
+    <SwitchRow label={t('requireMode')} checked={state.requireSwarmMode} onChange={props.setRequireMode} disabled={state.saving} />
+    <NumberSetting label={t('timeout')} hint={t('unlimitedHint')} value={state.timeoutMs / 60_000} integer={false} t={t} onSave={props.setTimeoutMinutes} />
+    <NumberSetting label={t('concurrency')} hint={t('concurrencyHint')} value={state.maxConcurrency} integer t={t} onSave={props.setMaxConcurrency} />
+    <SwitchRow label={t('mappingEnabled')} checked={state.modelMappingEnabled} onChange={props.setMappingEnabled} disabled={state.saving} />
+    <h3 className={css.sectionTitle}>{t('mappingTitle')}</h3><p className={css.hint}>{t('mappingHint')}</p>
+    <datalist id={datalist}>{state.presets.map((id) => <option key={id} value={id} />)}</datalist>
+    <ul className={css.mappingRows}>{state.rows.map((row, index) => {
+      const models = state.models.filter((model) => row.provider === '' || model.provider === row.provider)
+      const missing = row.model !== '' && !models.some((model) => model.id === row.model)
+      return <li key={index} className={css.mappingRow}>
+        <div className={css.mappingFields}>
+          <Input aria-label={t('type')} aria-invalid={state.invalidRows.includes(index)} list={datalist} value={row.type} placeholder={t('type')}
+            onChange={(event) => updateRow(index, { type: event.target.value })} />
+          <select aria-label={t('provider')} value={row.provider} onChange={(event) => updateRow(index, { provider: event.target.value })}>
+            <option value="">{t('defaultProvider')}</option>
+            {row.provider !== '' && !state.providers.some((p) => p.provider === row.provider) && <option value={row.provider}>{t('unavailableProvider', { provider: row.provider })}</option>}
+            {state.providers.map((p) => <option key={p.provider} value={p.provider}>{p.displayName}</option>)}
+          </select>
+          <select aria-label={t('model')} aria-invalid={state.invalidRows.includes(index)} value={row.model} onChange={(event) => updateRow(index, { model: event.target.value })}>
+            <option value="">{t('chooseModel')}</option>
+            {missing && <option value={row.model}>{t('unavailableModel', { model: row.model })}</option>}
+            {models.map((model) => <option key={`${model.provider}:${model.id}`} value={model.id}>{model.name} ({model.provider})</option>)}
+          </select>
+          <Button size="sm" aria-label={t('remove')} onClick={() => setRows(state.rows.filter((_, i) => i !== index))}>{t('remove')}</Button>
         </div>
-      ) : null}
-    </li>
-  )
+        {state.invalidRows.includes(index) && <div className={css.bad} role="alert">{t('invalidRow')}</div>}
+      </li>
+    })}</ul>
+    {state.dirty && <p className={css.hint} role="status">{t('unsaved')}</p>}
+    <div className={css.actions}>
+      <Button size="sm" onClick={() => setRows([...state.rows, { type: '', provider: '', model: '' }])}>{t('add')}</Button>
+      <Button size="sm" variant="primary" disabled={!state.dirty || state.saving || state.invalidRows.length > 0} onClick={() => { void saveRows() }}>{t('save')}</Button>
+      <Button size="sm" disabled={state.catalogLoading} onClick={() => { void refreshCatalog() }}>{t(state.catalogLoading ? 'loading' : 'refresh')}</Button>
+    </div>
+    {state.saving && <div role="status">{t('saving')}</div>}
+    {state.saveError !== null && <div className={css.bad} role="alert">{t('saveFailed', { error: state.saveError.kind === 'refused' ? t('hostRefused') : state.saveError.message })}</div>}
+    {state.catalogError !== null && <div className={css.bad} role="alert">{state.catalogError}</div>}
+  </div>
 }

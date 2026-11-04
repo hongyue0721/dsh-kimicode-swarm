@@ -1,53 +1,62 @@
 # 已知问题 / Known Issues
 
-> 维护者内部追踪文档。记录当前版本（0.1.1）已确认但尚未修复的问题，
-> 以及上游 DSH SDK 接口确认情况。
+> 维护者内部追踪文档。下方「待修复」是当前版本已确认但尚未修复的问题；
+> 「历史问题」保留 0.1.x 的分析记录，其中的 API 与行号对应当时的 SDK（0.1.1-rc.2）。
 >
-> Internal tracking document. Lists confirmed-but-unfixed issues in the
-> current release (0.1.1), plus upstream DSH SDK interface availability.
+> Internal tracking document. "Open" lists confirmed-but-unfixed issues in the
+> current code; "Historical" keeps the 0.1.x analysis, whose APIs and line
+> numbers refer to the SDK of that time (0.1.1-rc.2).
 
 ---
 
-## 上游接口确认 / Upstream API Availability
+## 待修复 / Open
 
-以下问题修复所需的上游 DSH SDK 接口均已确认存在于
-`@deepseek-ai/dsh-subagent@0.1.1-rc.2`，无生态阻塞。
+基于 DSH 0.2.1-rc.5。
 
-The upstream DSH SDK interfaces required to fix the issues below are all
-confirmed present in `@deepseek-ai/dsh-subagent@0.1.1-rc.2`; there are no
-ecosystem blockers.
+### O10：SSE 仍不提供身份与服务端会话授权
 
-### resume / 断点续做
+已增加 Origin host 检查和客户端 sessionId 过滤，但所有获准连接仍能收到全部会话快照。
+无 Origin 的非浏览器请求也能连接。这不是认证；对外部署需要宿主之外的访问控制，不能把 UI 过滤当成数据隔离。
 
-SDK 提供两条路径（见 `lib/types/index.d.ts` 的 `SubagentRuntime` 类）：
+### O11：尚未实机验证的路径
 
-The SDK exposes two paths (see `SubagentRuntime` in `lib/types/index.d.ts`):
+真实服务商的 429 与容量恢复、超时触发、128 项规模、`/swarm-events` 断线重连。这些只有单元测试。
+客户端单测使用平台替身，只验证交互和传参，已实机验证的范围见 `docs/architecture.md` 第 7 节。
 
-| 接口 / API | 作用 / Purpose | 文件 / File |
+### O12：刷新后的取消状态不持久化
+
+取消调用没有最终 presentationMeta，进度又是内存快照。刷新后只能在默认折叠的“原始结果”中查看 XML，
+不能恢复逐项状态行；这是当前设计边界，不伪造缺失的状态。
+
+### O9：已关闭的设计差异
+
+- 显式 `subagent_type` 先选择注册预设，映射表标签不改变能力；未知类型明确报错。
+- 限流容量改为成功发布数减一，未发布限流增加全局等待，进入限流模式后不退出。
+- SSE 增加 Origin 检查及父会话字段；剩余认证边界单独记录为 O10。
+- 取消 XML 默认折叠，刷新后的状态行限制单独记录为 O12。
+
+---
+
+## 已修复 / Fixed (rc.5 迁移之后)
+
+| 问题 | 根因 | 修复 |
 |---|---|---|
-| `ctx.subagents.startContinuable(spec)` | 创建一个持久子 Agent，接受初始 prompt 后返回 `childId`。Establish a durable continuable child; returns `childId` after accepting the initial prompt. | `continuation.d.ts:120` |
-| `ctx.subagents.followup(parent, childId, content, options)` | 向已有子 Agent 投递后续消息作为下一个 FIFO 轮次；子 Agent 不在内存时自动冷恢复。Deliver a later message to an existing child as its next FIFO turn; cold-resumes automatically when the child is absent. | `continuation.d.ts:136` |
-| `ctx.agents.resume({ sessionId, ... })` | 从持久化会话冷恢复一个 Agent。Cold-resume an Agent from its persisted session. | `continuation.d.ts:327`（`coldResume` 私有方法内部使用 / used internally by `coldResume`） |
-
-**结论**：H1 的修复路径可行——spawn 函数需按 `task.kind` 分流，
-resume 任务走 `followup`（或 `agents.resume` + 投递），
-新任务继续走 `start`。
-
-**Conclusion**: H1's fix path is viable — the spawn function must branch on
-`task.kind`: resume tasks go through `followup` (or `agents.resume` +
-delivery), new tasks continue through `start`.
-
-### 限流容量恢复 / Rate-limit capacity recovery
-
-这是插件自身调度逻辑的缺失，不涉及上游接口。`SwarmScheduler` 已有
-`recoveryAt` 唤醒候选和注入式时钟，只需在唤醒回调里补 `capacity += 1`。
-
-This is a gap in the plugin's own scheduling logic, not an upstream
-interface issue. `SwarmScheduler` already has the `recoveryAt` wake
-candidate and an injected clock; it only needs `capacity += 1` in the
-wake callback.
+| O9 模式、预设、调度与展示差异 | 旧行为缺少用户门槛，预设仅作标签 | Swarm v2 模式、fork、预设解析、调度对齐和原生界面 |
+| O1 爬坡在第 6 个任务后停止 | 启动任务后未重新安排唤醒 | 重写唤醒逻辑，启动后总是安排下一次 |
+| O2 超过宿主上限时任务失败 | 未识别 `ACTIVATION_LIMIT_REACHED` | 任务排回队列，下一个任务结束时再试；没有运行中的任务时定时重试 |
+| O3 `wakeAt` 忙等、定时器泄漏 | 未排队的 `eligibleAt` 为 0 被当作唤醒点；旧定时器未清除 | 只保留一个定时器，按实际下一个时刻设置 |
+| O4 模型限流不触发退避 | 限流以 `stopReason: 'error'` 返回，且曾靠文本匹配判断 | 监听 `agent/request-error`，按 `failure.code` 判断，并把错误详情写入结果 |
+| O5 持续限流时批次不结束 | 无重试上限 | 单任务最多重试 8 次（`maxRateLimitRetries`），这是与 Kimi 的有意差异 |
+| O6 取消后无法续做、结果不可见 | 子 Agent id 未及时上报；取消后宿主丢弃返回值 | 发布时上报 id；取消时以抛错交付结果，模型下一轮可见 |
+| O7 `EventSource` 出错后永久关闭 | 瞬断也会 `close()` | 瞬断交给浏览器重连，彻底关闭时退避重开；服务端向新连接补发运行中的快照 |
+| O8 结果 XML 正文未转义 | 展示数据从 XML 反解析 | 工具值改为结构化，展示数据直接投影；模型文本只中和封套标签 |
+| 超时、并发配置未生效 | 宿主未传入 | 新增配置 `timeoutMs`（默认 2 小时）、`maxConcurrency` |
+| 未挂载卡片的快照不清理 | 只由卡片负责清理 | 调用结束时服务端发送 `progress-end` |
+| 失败未启动的任务无法处理 | 提示只讲续做 | 结果增加 `<restart_hint>` |
 
 ---
+
+# 历史问题 / Historical (0.1.x)
 
 ## 高危 / High Severity
 
@@ -264,7 +273,7 @@ A resume-only batch (no `items`) shows `undefined 项`.
 | 文档过期（会话事件描述、测试数 21→30、items 范围） | ✅ 已修复 | 0.1.1 |
 | Stale docs (session-event description, test count 21→30, items range) | Fixed | 0.1.1 |
 | 依赖版本未适配 rc.2 / SDK version mismatch | ✅ 已升级 | 0.1.1 |
-| H1：resume_agent_ids 断点续做不工作 / resume not wired | ✅ 已修复 | 0.1.2 |
+| H1：resume_agent_ids 断点续做不工作 / resume not wired | ✅ 随 rc.5 迁移修复（0.1.2 的 `followup` 对 `start()` 启动的一次性子 Agent 仍会被拒绝） | 迁移版本 |
 | H2：限流容量恢复未实现 / capacity recovery missing | ✅ 已修复 | 0.1.2 |
 | M1：progress store 内存泄漏 / dropSwarmProgress never called | ✅ 已修复 | 0.1.2 |
 | M2：settle 后丢失 type/model 列 / settled rows lose type/model | ✅ 已修复 | 0.1.2 |
@@ -273,29 +282,15 @@ A resume-only batch (no `items`) shows `undefined 项`.
 | L1：EventSource 无错误处理 / no EventSource error handler | ✅ 已修复 | 0.1.2 |
 | L2：容量种子高估 / capacity seed overcounts | ✅ 已修复 | 0.1.2 |
 | L3：resume-only 计数显示 undefined / resume-only count undefined | ✅ 已修复 | 0.1.2 |
-| issue #1：`agentOptions.provider` 显式 undefined 覆盖继承 provider | ⏳ 等待外部 PR | — |
-| Issue #1: `agentOptions.provider` explicit undefined overwrites inherited provider | Awaiting external PR | — |
+| issue #1：`agentOptions.provider` 显式 undefined 覆盖继承 provider | ✅ 已修复（PR #4） | 0.1.2 |
+| Issue #1: `agentOptions.provider` explicit undefined overwrites inherited provider | Fixed (PR #4) | 0.1.2 |
 
 ---
 
-## 测试缺口 / Test Coverage Gaps
+## 测试与验收缺口
 
-0.1.2 版本新增了 `tests/render.spec.ts`（renderSwarmResults XML 往返，
-覆盖 M2/H1 渲染）和 `tests/progress-store.spec.ts`（store 生命周期，覆盖
-M1），并扩展了 `tests/scheduler.spec.ts`（容量恢复 H2、catch 状态 M3、
-容量种子 L2）。以下路径仍无测试覆盖：
+当前 157 个单元测试覆盖模式命令/恢复/子会话拒绝、fork 全部互斥参数、预设四条解析规则、独占元数据、
+成功发布容量和全局退避、进度字段/节流/终态立即发送、模式补发、Origin、客户端会话隔离与交互。
 
-Version 0.1.2 added `tests/render.spec.ts` (renderSwarmResults XML round-trip,
-covering M2/H1 rendering) and `tests/progress-store.spec.ts` (store lifecycle,
-covering M1), and extended `tests/scheduler.spec.ts` (capacity recovery H2,
-catch state M3, capacity seed L2). These paths remain untested:
-
-- **`src/index.ts` 宿主层**：spawn 的 resume 路径（H1，`followup` +
-  `subagent/end` 事件监听）需要 mock `ctx.subagents`；`/swarm` 命令、SSE
-  路由处理器、`isRateLimitError` 启发式仍无直接测试。
-- **调度器**：收缩间隔节流、cancel-mid-flight、`maxConcurrency` × 限流
-  交互。
-- **normalize**：模板多次占位符、item 值含 `{{item}}`、resume 非对象值、
-  跨种类去重。
-- **客户端组件**：`SwarmCard` 和 `SwarmSettingsCard` 需 React 测试环境
-  （`parseArgs` L3 修复通过推理验证，无组件级测试）。
+原生组件及 store 的替身单测不会证明宿主 CSS、Tooltip 定位、Markdown 排版或侧栏导航正确。
+历史的真实模型运行记录不属于本次验证，本次未使用真实 API key 或付费服务。

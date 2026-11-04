@@ -35,6 +35,11 @@ export interface ModelResolver {
   resolve(explicit: string | undefined, type: string | undefined): ResolvedModel | undefined
 }
 
+/** Host-owned preset catalog, resolved before this pure normalization pass. */
+export interface PresetResolver {
+  resolve(type: string): string | undefined
+}
+
 /** Normalization result. */
 export interface NormalizedSwarm {
   description: string
@@ -49,13 +54,15 @@ export interface NormalizedSwarm {
 export function normalizeSwarmArgs(
   args: SwarmToolArgs,
   modelResolver: ModelResolver,
+  presetResolver?: PresetResolver,
 ): NormalizedSwarm {
   const description = args.description.trim()
   if (description.length === 0) throw new SwarmArgsError('description is required.')
+  if (args.fork === true) assertForkCompatible(args)
 
-  const batchModel = optionalString(args.model)
-  const subagentType = optionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE
-  const promptTemplate = optionalString(args.prompt_template)
+  const batchModel = optionalString(args.model, 'model')
+  const subagentType = optionalString(args.subagent_type, 'subagent_type')
+  const promptTemplate = optionalString(args.prompt_template, 'prompt_template')
   const items = normalizeItems(args.items)
   const resumes = normalizeResumeEntries(args.resume_agent_ids)
 
@@ -102,20 +109,32 @@ export function normalizeSwarmArgs(
   items.forEach((entry, position) => {
     const prompt = template.split(PROMPT_TEMPLATE_PLACEHOLDER).join(entry.item)
     assertDistinctPrompt(seenPrompts, prompt, position)
-    const type = entry.type ?? subagentType
+    const explicitType = entry.type ?? subagentType
+    const type = explicitType ?? DEFAULT_SUBAGENT_TYPE
     tasks.push({
       index: tasks.length + 1,
-      kind: 'spawn',
+      kind: args.fork === true ? 'fork' : 'spawn',
       item: entry.item,
       prompt,
       type,
-      model: modelResolver.resolve(entry.model ?? batchModel, type),
+      model: args.fork === true ? undefined : modelResolver.resolve(entry.model ?? batchModel, type),
+      ...(explicitType === undefined || args.fork === true ? {} : { agentPreset: presetResolver?.resolve(explicitType) }),
       resumeAgentId: undefined,
       description: `${description} #${tasks.length + 1} (${type})`,
     })
   })
 
   return { description, tasks }
+}
+
+function assertForkCompatible(args: SwarmToolArgs): void {
+  if (args.resume_agent_ids !== undefined) {
+    throw new SwarmArgsError('fork cannot be combined with resume_agent_ids; resume existing children separately.')
+  }
+  if (args.model !== undefined || args.subagent_type !== undefined ||
+      args.items?.some((item) => typeof item !== 'string' && (item.model !== undefined || item.type !== undefined))) {
+    throw new SwarmArgsError('fork inherits the caller; omit model, subagent_type, and item model/type overrides.')
+  }
 }
 
 /** One normalized item entry. */
@@ -138,8 +157,8 @@ function normalizeItems(input: SwarmItemsInput | undefined): NormalizedItem[] {
       if (item.length === 0) throw new SwarmArgsError('items must not contain empty items.')
       out.push({
         item,
-        model: optionalString(raw.model),
-        type: optionalString(raw.type),
+        model: optionalString(raw.model, `items[${out.length}].model`),
+        type: optionalString(raw.type, `items[${out.length}].type`),
       })
     }
   }
@@ -154,7 +173,8 @@ function normalizeResumeEntries(input: unknown): Array<[string, string]> {
   const out: Array<[string, string]> = []
   for (const [agentId, prompt] of Object.entries(input)) {
     const trimmedAgent = agentId.trim()
-    const trimmedPrompt = String(prompt).trim()
+    if (typeof prompt !== 'string') throw new SwarmArgsError(`resume_agent_ids[${JSON.stringify(agentId)}] must be a string prompt.`)
+    const trimmedPrompt = prompt.trim()
     if (trimmedAgent.length === 0 || trimmedPrompt.length === 0) {
       throw new SwarmArgsError('resume_agent_ids entries must have non-empty agent_id and prompt.')
     }
@@ -179,10 +199,11 @@ function assertDistinctPrompt(
   seen.set(prompt, position)
 }
 
-function optionalString(value: string | undefined): string | undefined {
+function optionalString(value: string | undefined, field: string): string | undefined {
   if (value === undefined) return undefined
   const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : undefined
+  if (trimmed.length === 0) throw new SwarmArgsError(`${field} must be non-empty when provided; omit it to inherit.`)
+  return trimmed
 }
 
 /** Convenience: a resolver that only honors the explicit model (no mapping table). */

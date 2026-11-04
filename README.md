@@ -6,7 +6,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
   <img src="https://img.shields.io/badge/Host-DeepSeek%20Harness-informational?style=flat-square" alt="DeepSeek Harness" />
-  <img src="https://img.shields.io/badge/Tests-48%20passed-brightgreen?style=flat-square" alt="48 unit tests" />
+  <img src="https://img.shields.io/badge/Tests-157%20passed-brightgreen?style=flat-square" alt="157 unit tests" />
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
@@ -20,140 +20,144 @@
 
 ---
 
-把 **Kimi Code Swarm 模式**（主从式多 Agent 并行）搬进 DeepSeek Harness：主 Agent 把任务
-拆成互不依赖的子任务，`swarm_batch` 一次批量派发，子 Agent 并行执行，完成后汇总——
-官方基准下端到端效率最高提升 4.5 倍。**聊天内实时进度条**：每个子 Agent 一行状态
-（排队 / 运行中 / 完成），像 Kimi 的 TUI 一样看着任务逐个点亮。
+把 **Kimi Code 的 Agent Swarm** 带进 DeepSeek Harness：你开启 Swarm 模式，主 Agent 把工作拆成互不依赖的子任务，一次派发最多 128 个子 Agent 并行执行，完成后汇总。每个子 Agent 在做什么，聊天里实时看得见。
 
-## 特性
+<p align="center">
+  <img src="./assets/swarm-card-running.light.png" alt="运行中的 Swarm 卡片：分段进度条、每个子 Agent 的工具活动、耗时和限流倒计时" width="85%" />
+</p>
 
-- **`swarm_batch` 工具**：`prompt_template` + `items` 批量生成子任务（最多 128 项），
-  每项可带 `model` / `type`；`resume_agent_ids` 断点续做。
-- **自适应调度**（对齐 Kimi SubagentBatch 调度合约）：先 5 个并发 + 每 700ms 爬坡 1 个；
-  撞限流指数退避（3s/6s/12s…）并自适应收缩/恢复并发容量；用户取消保留已完成结果；
-  单任务超时只失败该任务。
-- **`/swarm <任务>` 命令**：一次性 Swarm 模式——探索边界、拆解子任务、批量派发、
-  汇总结果、自动退出模式（对齐 Kimi 的 task 触发语义）。
-- **聊天内实时进度条**：host 端把全量快照进度帧经 SSE 路由（`/swarm-events`）广播，
-  浏览器端用同源 EventSource 订阅写入 progress-store 渲染，运行中蓝点脉冲、排队灰点、
-  完成绿点。进度仅用于展示，不写入会话日志（rc.8 拒绝词表外会话事件）。
-- **模型三级分配**：item 级/整批显式 `model` > 设置映射表（按 type 命中）> 继承调用者
-  模型（默认，由 Agent 自由分配）。
+## 亮点
 
-## 架构
+- **按子任务分配模型**：每一项都能指定模型，把贵的模型留给难的任务。
+- **限流不用人管**：自动退避，接着原来的子 Agent 继续；单任务最多重试 8 次，额度耗尽时会明确失败，不会一直挂着。
+- **取消不丢活**：已完成的结果模型下一轮还能看到，未完成的可按 `agent_id` 带历史续做。
+- **费用你说了算**：默认只有你开启 Swarm 模式后才能派发，Agent 不能自己一次开上百个子 Agent。
+- **原生界面**：分段进度条、工具活动、限流倒计时、一键进入子会话、Markdown 结果，中英文和深浅主题都跟随 DSH。
+- **带上下文派发**：`fork: true` 让子 Agent 继承当前对话历史。
+- **零运行时依赖**：所有依赖都由宿主提供。
 
-```
-┌─ host 半区（node 进程，src/index.ts）─────────────────────────┐
-│  swarm_batch 工具（ctx.tools.register）                        │
-│    ├─ 参数归一化（core/normalize.ts）：模板填充 / 模型解析 / 去重 │
-│    ├─ SwarmScheduler（core/scheduler.ts）：两阶段自适应并发调度  │
-│    │    └─ onProgress 回调：每步状态变化发全量快照              │
-│    ├─ ctx.subagents.start()：真实子 Agent 启动（继承调用者模型） │
-│    └─ progress.ts：createProgressBroadcaster → SSE 帧          │
-│        （/swarm-events 路由，SWARM_PROGRESS_ROUTE）              │
-│  /swarm 命令（ctx.commands.register）：一次性 Swarm 模式指令     │
-│  设置命名空间 + 系统提示词公告                                  │
-└──────────────────────────────────────────────────────────────┘
-                            │ SSE（event: progress，JSON 快照）
-┌─ browser 半区（Web GUI，src/client/）─────────────────────────┐
-│  index.ts：同源 EventSource 订阅 /swarm-events                  │
-│  progress-store.ts：模块级进度存储（按 callId 存最新快照）        │
-│  SwarmCard.tsx：tool.call.toolview keyed 视图                   │
-│    ├─ 运行中：每子 Agent 一行实时状态（排队/运行中/完成）        │
-│    └─ 完成后：结果面板（每行可展开，汇总自 presentationMeta）    │
-│  SwarmSettingsCard.tsx：设置卡片（模型映射表，模型目录动态拉取）  │
-└──────────────────────────────────────────────────────────────┘
-```
+## 有多快
 
-关键设计决策：
+每个任务时长固定、互相独立时，调度层相比串行的提速：
 
-- **调度核心与运行时解耦**：`core/` 是纯逻辑（注入 SpawnFn 与时钟），单测用假实现
-  驱动，不依赖宿主类型（参照 dsh-task-board 的 framework-free 风格）。
-- **进度走专用 SSE 路由而非会话事件**：rc.8 拒绝词表外会话事件（`swarm/progress` 不在
-  宿主词表内，append 也无法标记可忽略），进度快照改由 host 端经 `/swarm-events` 路由
-  广播、浏览器端同源 EventSource 订阅——零宿主改动，会话日志保持干净。
-- **模型分配默认交还 LLM**：不传 `model` 即继承调用者模型，Agent 按任务难度自行
-  分配；显式指定始终优先。
+| 任务 | 宿主并发上限 | 串行 | Swarm | 提速 |
+|---|---|---|---|---|
+| 128 个，每个 5 分钟 | 128 | 38400 秒 | 386 秒 | **99.5 倍** |
+| 128 个，每个 60 秒 | 128 | 7680 秒 | 146 秒 | 52.6 倍 |
+| 20 个，每个 60 秒 | 128 | 1200 秒 | 71 秒 | 17 倍 |
+| 128 个，每个 60 秒 | 8（默认） | 7680 秒 | 965 秒 | 8 倍 |
 
-## 安装
+这是虚拟时钟下的调度模拟，用 `pnpm bench` 可以复现。它不含模型限流，也不代表 token 费用，实际速度取决于任务和服务商。**默认上限下最多提速 8 倍**，要跑得更快需要调大 `maxActiveSubagents`（见[配置](#配置)）。并行同样会消耗更多 token。
 
-已发布到 **npm**（`dsh-kimicode-swarm`），一行装进任意 DSH profile：
+## 快速开始
+
+需要 DeepSeek Harness **0.2.1-rc.5** 或更新版本。
+
+> npm 上的 0.1.2 与 rc.5 不兼容，新版发布前请从源码安装：
+>
+> ```bash
+> git clone https://github.com/hongyue0721/dsh-kimicode-swarm && cd dsh-kimicode-swarm
+> pnpm install && pnpm build
+> dsh plugin --profile web add "file:$PWD"
+> ```
+
+新版发布后，一行即可：
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm
-# 等价于:
-pnpm add dsh-kimicode-swarm
 ```
 
-或从 GitHub / 本地直接装：
+重启 `dsh web`，在新会话里试试：
 
-```bash
-pnpm add github:hongyue0721/dsh-kimicode-swarm   # 或
-pnpm add file:/path/to/dsh-kimicode-swarm
+```text
+/swarm 审查 src/ 下每个模块，分别给出修复建议
 ```
-
-装完重启 `dsh web`，**新会话**可见 `swarm_batch` 工具与 `/swarm` 命令。
 
 ## 使用
 
-**让 Agent 干活**：直接描述任务，Agent 会自行判断是否值得批量并行；或明确要求
-「用 swarm 批量派发」。
+### Swarm 模式
 
-**快捷命令**：
+| 命令 | 作用 |
+|---|---|
+| `/swarm` | 切换模式 |
+| `/swarm on` / `/swarm off` | 持续开启 / 关闭，模式随会话保存 |
+| `/swarm <任务>` | 只为这个任务开启，回合结束自动退出 |
 
+模式开启时输入区会显示 Swarm 徽标，点一下就能关。子 Agent 不能再嵌套派发。
+
+子 Agent 不能申请额外审批（DSH 固定其审批策略为 `never`）：超出委派权限的操作会被直接拒绝，交回父 Agent 处理，批次不会停下来等待。插件不会修改你的权限模式。
+
+### 指定模型
+
+优先级从高到低：单项或整批的 `model` > 配置页的映射表 > 继承调用者的模型。
+
+```json
+{ "item": "src/core/scheduler.ts", "model": "deepseek-v4-pro" }
 ```
-/swarm 审查这三个模块的代码并给出修复建议
-```
 
-**模型分配**：默认继承调用者模型；想按任务指定，给 `items` 的某项写
-`{ "item": "...", "model": "deepseek-v4-pro" }`，或整批传 `model` 字段。
-
-**`swarm_batch` 参数**（模型侧契约）：
+### `swarm_batch` 参数
 
 | 参数 | 说明 |
 |---|---|
 | `description` | 整个 swarm 的简短描述 |
-| `subagent_type` | 子 Agent 类型（默认 `coder`） |
-| `model` | 整批模型覆盖（显式优先于映射表） |
-| `prompt_template` | 必填，含 `{{item}}` 占位符 |
-| `items` | 2..128 项（提供 `resume_agent_ids` 时可少于 2 项）；`string` 或 `{ item, model?, type? }` |
-| `resume_agent_ids` | `agent_id -> prompt` 映射，断点续做（优先于新派发） |
+| `prompt_template` | 含 `{{item}}` 占位符的提示词模板，提供 `items` 时必填 |
+| `items` | 2 到 128 项（提供 `resume_agent_ids` 时可少于 2 项），`string` 或 `{ item, model?, type? }` |
+| `model` | 整批模型，优先于映射表 |
+| `subagent_type` | 先匹配已注册的 Agent 预设，再匹配映射表标签，都不匹配时报错；省略则继承父 Agent |
+| `fork` | 继承截至上一回合的对话历史，不能与 `resume_agent_ids`、`model`、`type`、`subagent_type` 同用 |
+| `resume_agent_ids` | `agent_id -> prompt` 映射，接着已有子 Agent 继续，先于新任务启动 |
+
+`fork` 适合需要上下文的子任务，但每个子 Agent 都带着完整历史，token 消耗更高。
 
 ## 配置
 
-设置页卡片暂不可用（见下）；当前配置走 profile patch 的 entry config 或
-`~/.dsh/settings.yaml` 的 `swarm:` 段：
+模型映射、超时和并发可以在 Web 界面的「插件 → dsh-kimicode-swarm」页面修改，下一次派发立即生效。配置保存在 profile 条目中（`~/.dsh/profiles/<profile>/cordis.patch.yml`）：
 
 ```yaml
-swarm:
-  enabled: true
-  announceToAgent: true
-  modelMappingEnabled: false
-  modelMapping:
-    - type: explore
-      provider: deepseek-official
-      model: deepseek-v3
+- id: dsh-kimicode-swarm
+  name: dsh-kimicode-swarm
+  config:
+    requireSwarmMode: true      # false 时 Agent 可以自行调用
+    timeoutMs: 7200000          # 单个子 Agent 超时，默认 2 小时，0 为不限
+    maxConcurrency: 0           # 单批并发上限，0 为不额外限制
+    modelMappingEnabled: false
+    modelMapping:
+      - type: explore
+        provider: deepseek-official
+        model: deepseek-v3
+```
+
+`enabled` 和 `announceToAgent`（默认都是 `true`）在挂载时读取，只能在这个条目里改，改完插件会重新挂载。
+
+**想跑得更快？** 宿主默认最多同时运行 8 个子 Agent，超出的任务会排队。要提高并发，在 DSH 的「子智能体」设置页调大这个上限，或者写进 profile 的 `subagent` 条目：
+
+```yaml
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+  config:
+    maxActiveSubagents: 32
 ```
 
 ## 已知限制
 
-- **设置页卡片受宿主白名单限制**：`dsh-host-apiproxy` 的 `WEB_SETTINGS_NAMESPACES`
-  硬编码白名单，插件自注册的设置命名空间对配置客户端一律 `settings-not-exposed`
-  （官方注释将「插件自声明暴露」列为 deferred work，family 插件通病）。卡片代码已
-  完整实现，不可用状态下渲染为空；GUI 编辑待宿主放开后启用。
-- 子 Agent 执行期间不回报中间 token（`subagents.start` 是等最终结果），进度条展示
-  的是每个子 Agent 的启动/完成状态，非 token 级流式。
-- 无文件锁：多子 Agent 写冲突靠任务拆分规避（与原版一致）。
+- **需要 Web 层**：插件依赖 `webServer` 服务，在没有 web 层的 profile（如 `tui`、`headless`）中不会激活。
+- **进度通道不是认证边界**：`/swarm-events` 会拒绝跨站请求，但同源客户端能收到所有会话的进度，再由界面过滤。默认只监听本机；用 `--host` 开放到局域网前请注意。
+- **没有 token 级进度**：进度展示状态、工具调用次数和最近的工具名。
+- **刷新后取消结果只剩文本**：已取消的批次刷新页面后不再显示状态行，结果文本仍在。
+- **没有文件锁**：多个子 Agent 的写冲突靠任务拆分规避，与 Kimi Code 相同。
+
+更多见 [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest（48 个用例：调度爬坡/限流/取消/超时/容量恢复 + 参数归一化 + 进度广播 + 渲染往返 + store 生命周期）
-pnpm build       # lib/（host 半区）+ lib/client.js（browser 半区）
+pnpm typecheck
+pnpm test        # 157 个用例
+pnpm build       # 产物在 lib/
+pnpm bench       # 复现上面的调度数字
 ```
 
-架构与设计细节见 [docs/architecture.md](docs/architecture.md)。
+设计细节和与 Kimi Code 的对照见 [docs/architecture.md](docs/architecture.md)。调度算法参考了 [Kimi Code](https://github.com/MoonshotAI/kimi-code)（MIT）。
 
-交流 / 反馈：[Issues](https://github.com/hongyue0721/dsh-kimicode-swarm/issues)
+交流与反馈：[Issues](https://github.com/hongyue0721/dsh-kimicode-swarm/issues)

@@ -30,7 +30,9 @@ export type SwarmItemsInput = Array<string | SwarmItemInput>
 export interface SwarmTask {
   /** 1-based index (matches the rendered `#N` description). */
   index: number
-  kind: 'spawn' | 'resume'
+  kind: 'spawn' | 'fork' | 'resume'
+  /** Explicitly selected spawn preset; omitted to inherit the parent composition. */
+  agentPreset?: string
   /** Item value filled into the template; absent for resume entries. */
   item: string | undefined
   /** Final per-subagent prompt (template filled). */
@@ -57,10 +59,17 @@ export interface SwarmAttemptResult {
   error?: string
   /** True when the attempt hit a provider rate limit (triggers backoff). */
   rateLimited?: boolean
+  /** True when the host refused the attempt because its active-child limit is full. */
+  capacityLimited?: boolean
 }
 
 /** One settled slot, paired with its task. */
 export interface SwarmRunResult {
+  startedAt?: number
+  settledAt?: number
+  toolCalls?: number
+  activity?: string
+  retries?: number
   task: SwarmTask
   agentId: string | undefined
   status: 'completed' | 'failed' | 'aborted'
@@ -69,11 +78,27 @@ export interface SwarmRunResult {
   error?: string
 }
 
+/** Per-attempt scheduler context handed to the SpawnFn. */
+export interface SwarmAttemptContext {
+  /** Child left behind by an earlier rate-limited attempt; retry continues it instead of starting over. */
+  retryAgentId: string | undefined
+  /** Publish the child id as soon as it exists, so cancellation can report it for resume. */
+  onStarted: (agentId: string) => void
+}
+
 /** Starts one subagent and resolves with its terminal state. Never throws. */
-export type SpawnFn = (task: SwarmTask, signal: AbortSignal) => Promise<SwarmAttemptResult>
+export type SpawnFn = (
+  task: SwarmTask,
+  signal: AbortSignal,
+  attempt: SwarmAttemptContext,
+) => Promise<SwarmAttemptResult>
 
 /** Tool-argument schema advertised to the model (dsh-tools parameter spec). */
 export const swarmParameters = {
+  fork: {
+    type: 'boolean',
+    description: 'Seed each item child with the caller history through the last completed turn. Useful for context-dependent work, but every child carries the full history and costs more tokens. Cannot combine with resume_agent_ids, model, subagent_type, or item model/type overrides.',
+  },
   description: {
     type: 'string',
     required: true,
@@ -82,7 +107,7 @@ export const swarmParameters = {
   subagent_type: {
     type: 'string',
     description:
-      'Subagent type used for every new subagent spawned from items; defaults to coder when omitted. Resumed subagents always keep their original type.',
+      'Registered agent preset id or configured model-mapping type for item children. A preset selects tools/persona; a mapping label only selects a model. Omit to inherit the parent composition (mapping label coder). Spawn only.',
   },
   model: {
     type: 'string',
@@ -112,7 +137,7 @@ export const swarmParameters = {
             },
             type: {
               type: 'string',
-              description: 'Task type; looked up in the settings model-mapping table.',
+              description: 'Registered agent preset id or configured model-mapping type for this item. Spawn only.',
             },
           },
           additionalProperties: false,
@@ -120,7 +145,7 @@ export const swarmParameters = {
       ],
     },
     description:
-      'Values used to fill the prompt template; each entry launches one subagent (1..128). A plain string uses the policy-resolved model; an object may carry per-item model/type.',
+      'Values used to fill the prompt template; each entry launches one subagent (at most 128). A plain string uses the policy-resolved model; an object may carry per-item model/type.',
   },
   resume_agent_ids: {
     type: 'json',
@@ -131,6 +156,7 @@ export const swarmParameters = {
 
 /** Normalized tool input (mirrors the schema; json fields re-validated at runtime). */
 export interface SwarmToolArgs {
+  fork?: boolean
   description: string
   subagent_type?: string
   model?: string
