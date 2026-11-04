@@ -233,6 +233,21 @@ describe('owner disclosure and cancellation', () => {
   })
 })
 
+describe('cancellation notice', () => {
+  const completed = { description: 'Done', subagents: [{ index: 1, item: 'a', type: 'coder', model: null, agentId: 'child', status: 'completed', state: 'started', error: null, result: 'ok' }] }
+  const xml = '<agent_swarm_result><summary>completed: 1</summary></agent_swarm_result>'
+
+  it('does not call a successful batch cancelled because its result is XML', async () => {
+    await render(<SwarmCard {...props({ phase: 'result', block: result(xml, completed) })} />)
+    expect(container.textContent).not.toContain(en.cancelled)
+  })
+
+  it('still marks a call that failed with the rendered results as cancelled', async () => {
+    await render(<SwarmCard {...props({ phase: 'result', block: { ...result(`Error: ${xml}`), isError: true } })} />)
+    expect(container.textContent).toContain(en.cancelled)
+  })
+})
+
 describe('declared host services', () => {
   it('injects every required Remote namespace the client reads directly', async () => {
     // A fake context cannot catch an undeclared service: the real one throws on access.

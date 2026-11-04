@@ -6,7 +6,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
   <img src="https://img.shields.io/badge/Host-DeepSeek%20Harness-informational?style=flat-square" alt="DeepSeek Harness" />
-  <img src="https://img.shields.io/badge/Tests-157%20passed-brightgreen?style=flat-square" alt="157 unit tests" />
+  <img src="https://img.shields.io/badge/Tests-159%20passed-brightgreen?style=flat-square" alt="159 unit tests" />
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
@@ -149,7 +149,7 @@ See [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) for more.
 ```sh
 pnpm install
 pnpm typecheck
-pnpm test        # 157 tests
+pnpm test        # 159 tests
 pnpm build       # output in lib/
 pnpm bench       # reproduce the scheduling numbers above
 ```

@@ -164,7 +164,7 @@ interface SwarmProgressFrame {
 
 ## 7. 测试与验收
 
-测试命令为 `pnpm typecheck`、`pnpm test`、`pnpm build`，调度数字用 `pnpm bench` 复现。当前 157 个单元测试覆盖模式、门槛、
+测试命令为 `pnpm typecheck`、`pnpm test`、`pnpm build`，调度数字用 `pnpm bench` 复现。当前 159 个单元测试覆盖模式、门槛、
 fork 冲突、预设四条规则、发布容量种子和全局退避、进度节流/补发、Origin、客户端会话过滤和交互。
 客户端单测以平台组件及快照 store 替身验证产品逻辑，不能代替真实宿主验收：它们测不出未声明的宿主服务，
 这类错误只在真实上下文访问时才抛出。
@@ -174,5 +174,7 @@ fork 冲突、预设四条规则、发布容量种子和全局退避、进度节
 限流倒计时及 429 后接续同一子 Agent、失败行、完成态与 Markdown 结果、子会话跳转、取消中断请求、配置页读写、
 跨站 Origin 被拒绝。headless 下确认了 task 回合结束退出、fork 继承已完成历史及拒绝嵌套、模式磁盘恢复。
 调大 `maxActiveSubagents` 后 12 个任务全部在第一个任务结束前启动。
+
+真实 DeepSeek 模型（默认 Flash）跑通一次 `/swarm <任务>`：4 个子 Agent 各调用一次 `read` 工具后全部完成，回合结束后模式自动退出；用量 80.7K token，缓存命中 97%。模式关闭时模型收到拒绝后会提示用户开启。
 
 未实机验证：真实服务商的 429 与容量恢复、超时触发、128 项规模、`/swarm-events` 断线重连。这些由单元测试覆盖。

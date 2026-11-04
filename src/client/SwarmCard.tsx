@@ -148,8 +148,9 @@ export function SwarmCard(props: SwarmCardProps): JSX.Element {
   useEffect(() => { list.setExpanded(!allCompleted) }, [allCompleted, list.setExpanded])
   const copyLabel = t('copy'), copiedLabel = t('copied'), footnotes = t('footnotes')
   const labels = useMemo<MarkdownLabels>(() => ({ code: { copyLabel, copiedLabel }, footnotes }), [copyLabel, copiedLabel, footnotes])
-  const rawXml = text.includes('<agent_swarm_result>')
-  const cancelled = rawXml || (settled && props.block.error?.code === 'ABORTED') || rows.some((row) => row.status === 'aborted')
+  // A normal result carries the same XML, so only a failed call can read as cancelled through it.
+  const cancelledCall = settled && props.block.isError && (text.includes('<agent_swarm_result>') || props.block.error?.code === 'ABORTED')
+  const cancelled = cancelledCall || rows.some((row) => row.status === 'aborted')
   if (settled && props.block.isError && meta === undefined && rows.length === 0 && !cancelled) {
     return <div className={css.denied} role="status">{t('denied', { error: text.replace(/^Error:\s*/, '') })}</div>
   }

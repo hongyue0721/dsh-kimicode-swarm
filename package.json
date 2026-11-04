@@ -1,7 +1,20 @@
 {
   "name": "dsh-kimicode-swarm",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness 批量并行子 Agent 调度插件：swarm_batch 工具（Kimi Code Swarm 模式移植）+ /swarm 命令 + 聊天内实时进度条。",
+  "version": "0.2.1",
+  "description": "Batch-parallel subagents for DeepSeek Harness: Swarm mode, per-item models, rate-limit recovery and a live in-chat panel. DeepSeek Harness 批量并行子 Agent：Swarm 模式、单项指定模型、限流恢复与聊天内实时面板。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "agent-swarm",
+    "swarm",
+    "subagent",
+    "multi-agent",
+    "parallel",
+    "batch",
+    "kimi-code"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hongyue0721/dsh-kimicode-swarm.git"
