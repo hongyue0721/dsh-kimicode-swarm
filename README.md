@@ -51,20 +51,16 @@
 
 ## 快速开始
 
-需要 DeepSeek Harness **0.2.1-rc.5** 或更新版本。
-
-> npm 上的 0.1.2 与 rc.5 不兼容，新版发布前请从源码安装：
->
-> ```bash
-> git clone https://github.com/hongyue0721/dsh-kimicode-swarm && cd dsh-kimicode-swarm
-> pnpm install && pnpm build
-> dsh plugin --profile web add "file:$PWD"
-> ```
-
-新版发布后，一行即可：
+已在 DeepSeek Harness **0.2.1-rc.5** 上验证。DSH 的插件接口还在快速变化，其他版本未经测试；0.2.0 之前的版本不支持 0.2.1。
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm
+```
+
+也可以从 [GitHub Release](https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest) 下载 `dsh-kimicode-swarm.tgz` 安装：
+
+```bash
+dsh plugin --profile web add "file:$PWD/dsh-kimicode-swarm.tgz"
 ```
 
 重启 `dsh web`，在新会话里试试：

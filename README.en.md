@@ -51,20 +51,16 @@ This is a scheduling simulation on a virtual clock, and `pnpm bench` reproduces 
 
 ## Quick start
 
-Requires DeepSeek Harness **0.2.1-rc.5** or later.
-
-> Version 0.1.2 on npm is not compatible with rc.5. Until the new version is published, install from source:
->
-> ```bash
-> git clone https://github.com/hongyue0721/dsh-kimicode-swarm && cd dsh-kimicode-swarm
-> pnpm install && pnpm build
-> dsh plugin --profile web add "file:$PWD"
-> ```
-
-Once it is published, one line is enough:
+Verified on DeepSeek Harness **0.2.1-rc.5**. DSH's plugin APIs are still moving quickly, so other versions are untested. Versions of this plugin before 0.2.0 do not support DSH 0.2.1.
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm
+```
+
+You can also download `dsh-kimicode-swarm.tgz` from the [GitHub Release](https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest) and install it:
+
+```bash
+dsh plugin --profile web add "file:$PWD/dsh-kimicode-swarm.tgz"
 ```
 
 Restart `dsh web` and try this in a new session:
