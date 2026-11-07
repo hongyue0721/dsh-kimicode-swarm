@@ -38,7 +38,7 @@ Inspired by **Kimi K2.5 Agent Swarm** and **Kimi Code**, this plugin brings batc
 
 ## Scheduling Performance
 
-Theoretical scheduling speedup compared to serial execution for independent tasks of fixed duration:
+Swarm parallel scheduling compared with serial execution (run `pnpm bench` to reproduce):
 
 | Workload | Host concurrency limit | Serial | Swarm | Speedup |
 |---|---|---|---|---|
@@ -47,7 +47,7 @@ Theoretical scheduling speedup compared to serial execution for independent task
 | 20 tasks, 60 seconds each | 128 | 1200 s | 71 s | 17x |
 | 128 tasks, 60 seconds each | 8 (default) | 7680 s | 965 s | 8x |
 
-These figures come from a virtual-clock scheduler benchmark that you can reproduce with `pnpm bench`. Actual wall-clock time and token usage depend on task complexity and provider rate limits. By default, DSH runs up to 8 subagents concurrently (up to an 8x speedup); raise `maxActiveSubagents` in [Configuration](#configuration) to scale higher.
+By default, DSH runs up to 8 subagents concurrently (up to an 8x speedup); raise `maxActiveSubagents` in [Configuration](#configuration) to scale higher.
 
 ## Quick Start
 
@@ -145,7 +145,7 @@ pnpm install
 pnpm typecheck
 pnpm test        # run 160 unit tests
 pnpm build       # output in lib/
-pnpm bench       # run the virtual-clock scheduler benchmark
+pnpm bench       # run the scheduler benchmark
 ```
 
 Architecture details and a side-by-side comparison with Kimi Code are available in [docs/architecture.md](docs/architecture.md). The scheduling design draws inspiration from [Kimi Code](https://github.com/MoonshotAI/kimi-code) (MIT).

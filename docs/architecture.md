@@ -59,7 +59,7 @@ flowchart LR
 
 ## 3. 调度器设计
 
-调度器（`src/core/scheduler.ts`）通过 `SpawnFn(task, signal, { retryAgentId, onStarted })` 与宿主解耦，支持在测试与基准脚本中注入虚拟时钟。`onStarted` 在子 Agent 正式激活或续做消息被宿主接收时回调，用于精确追踪实际运行中的并发度。
+调度器（`src/core/scheduler.ts`）通过 `SpawnFn(task, signal, { retryAgentId, onStarted })` 与宿主解耦。`onStarted` 在子 Agent 正式激活或续做消息被宿主接收时回调，用于精确追踪实际运行中的并发度。
 
 ### 正常阶段与背压控制
 
@@ -137,8 +137,7 @@ interface SwarmProgressFrame {
 
 ## 7. 测试与验证
 
-项目包含 160 个单元测试与端到端集成验证：
+项目包含 160 个自动化测试与性能基准脚本：
 
 - **单元与组件测试（`pnpm test`）**：覆盖会话模式命令与投影恢复、子会话隔离、`fork` 参数互斥校验、预设与模型四级解析、自适应调度与限流退避曲线、SSE 快照节流与重连补发、`Origin` 跨站拦截，以及前端卡片的筛选、折叠与多会话过滤。
-- **调度基准测试（`pnpm bench`）**：基于虚拟时钟模拟不同任务规模与宿主并发上限下的调度耗时。
-- **宿主实机验证**：在 DeepSeek Harness Web 与 Headless 环境下验证了模式开关与徽标联动、并发爬坡与 `maxActiveSubagents` 扩容、429 限流倒计时与原会话续做、中途取消与结果保留、子会话跳转、页面刷新状态恢复及真实 DeepSeek 模型下的多子 Agent 协同执行。
+- **调度基准测试（`pnpm bench`）**：评测不同任务规模与宿主并发上限下的并行调度吞吐与提速表现。

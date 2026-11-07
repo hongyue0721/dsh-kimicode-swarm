@@ -38,7 +38,7 @@
 
 ## 调度性能
 
-在各子任务时长固定且相互独立的场景下，Swarm 并行调度相比串行执行的理论提速比：
+Swarm 并行调度与串行执行的耗时对比（可通过 `pnpm bench` 运行基准测试）：
 
 | 任务规模 | 宿主并发上限 | 串行耗时 | Swarm 耗时 | 提速比 |
 |---|---|---|---|---|
@@ -47,7 +47,7 @@
 | 20 个任务，单项 60 秒 | 128 | 1200 秒 | 71 秒 | 17x |
 | 128 个任务，单项 60 秒 | 8（默认） | 7680 秒 | 965 秒 | 8x |
 
-以上数据来自虚拟时钟下的调度基准测试，可通过 `pnpm bench` 复现。实际运行耗时与 token 用量取决于具体任务复杂度及模型服务商的速率限制。DSH 宿主默认同时运行 8 个子 Agent（对应最高 8 倍提速），如需释放更高并发，可在配置中调大 `maxActiveSubagents`（见[配置](#配置)）。
+DSH 宿主默认同时运行 8 个子 Agent（对应最高 8 倍提速），如需释放更高并发，可在配置中调大 `maxActiveSubagents`（见[配置](#配置)）。
 
 ## 快速开始
 
@@ -145,7 +145,7 @@ pnpm install
 pnpm typecheck
 pnpm test        # 运行 160 个单元测试
 pnpm build       # 构建产物输出至 lib/
-pnpm bench       # 运行虚拟时钟调度基准测试
+pnpm bench       # 运行调度性能基准测试
 ```
 
 架构设计与 Kimi Code 的实现对照请参见 [docs/architecture.md](docs/architecture.md)。调度算法参考了 [Kimi Code](https://github.com/MoonshotAI/kimi-code)（MIT）。
