@@ -6,7 +6,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/topic-dsh--plugin-amber?style=flat-square" alt="dsh-plugin" /></a>
   <img src="https://img.shields.io/badge/Host-DeepSeek%20Harness-informational?style=flat-square" alt="DeepSeek Harness" />
-  <img src="https://img.shields.io/badge/Tests-159%20passed-brightgreen?style=flat-square" alt="159 unit tests" />
+  <img src="https://img.shields.io/badge/Tests-160%20passed-brightgreen?style=flat-square" alt="160 unit tests" />
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
 </p>
 
@@ -51,13 +51,11 @@ This is a scheduling simulation on a virtual clock, and `pnpm bench` reproduces 
 
 ## Quick start
 
-Verified on DeepSeek Harness **0.2.1-rc.5**. DSH's plugin APIs are still moving quickly, so other versions are untested. Versions of this plugin before 0.2.0 do not support DSH 0.2.1.
+Verified on DeepSeek Harness **0.2.2-rc.1** (and 0.2.1-rc.5). DSH's plugin APIs are still moving quickly, so other versions are untested. Versions of this plugin before 0.2.0 do not support DSH 0.2.x.
 
 ```bash
-dsh plugin --profile web add https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest/download/dsh-kimicode-swarm.tgz
+dsh plugin --profile web add dsh-kimicode-swarm
 ```
-
-This installs the latest version from the [GitHub Release](https://github.com/hongyue0721/dsh-kimicode-swarm/releases/latest). The `dsh-kimicode-swarm` package on npm is still the incompatible 0.1.2, so don't install by package name for now.
 
 Restart `dsh web` and try this in a new session:
 
@@ -145,7 +143,7 @@ See [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) for more.
 ```sh
 pnpm install
 pnpm typecheck
-pnpm test        # 159 tests
+pnpm test        # 160 tests
 pnpm build       # output in lib/
 pnpm bench       # reproduce the scheduling numbers above
 ```

@@ -1,7 +1,9 @@
 /** Strict plugin record folding and reload compatibility without an LLM or web server. */
-import { describe, expect, it } from 'vitest'
-import { Session, SessionId, appendPluginRecord } from '@deepseek-ai/dsh-session'
-import { foldMode, initialMode, MODE_RECORD, parseMode } from '../src/swarm-mode.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import { Session, SessionId, SessionStore, appendPluginRecord } from '@deepseek-ai/dsh-session'
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
+import { foldMode, initialMode, MODE_RECORD, parseMode, SwarmModeController } from '../src/swarm-mode.ts'
 
 describe('mode record fold', () => {
   it('validates mode invariants instead of supplying missing facts', () => {
@@ -23,5 +25,21 @@ describe('mode record fold', () => {
     const state = initialMode()
     const unrelated = { ...session.snapshotEvents()[0], type: 'plugin:another-plugin/record' } as any
     expect(foldMode(state, unrelated)).toBe(state)
+  })
+  it('registers with the real SessionProjectionRegistry and reads through the handle without deprecation warnings', async () => {
+    const ctx = new Context()
+    const warn = vi.spyOn(ctx.logger, 'warn')
+    ctx.set('sessionProjections', new SessionProjectionRegistry(ctx))
+    ;(ctx as any).systemPrompt = { context: vi.fn(() => () => {}) }
+    const frames: unknown[] = []
+    const controller = new SwarmModeController(ctx, (frame) => frames.push(frame))
+    await controller.ready
+    const sessions = new SessionStore(ctx)
+    const session = sessions.create()
+    expect(controller.get(session)).toEqual(initialMode())
+    expect(controller.set(session, 'manual')).toBe(true)
+    expect(controller.get(session)).toEqual({ active: true, trigger: 'manual', everActive: true })
+    expect(warn).not.toHaveBeenCalled()
+    expect(frames.at(-1)).toEqual({ sessionId: session.id, active: true, trigger: 'manual' })
   })
 })

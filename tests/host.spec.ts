@@ -36,9 +36,13 @@ function setup(config: Config = makeConfig()) {
   let tool: any
   let projection: any
   const parent: any = { id: 'parent' }
+  const stateOf = (session: Session) => session.snapshotEvents().reduce(projection.apply, projection.init())
   const services: Record<string, any> = { sessionProjections: {
-    register: (definition: any) => { projection = definition },
-    stateOf: (session: Session) => session.snapshotEvents().reduce(projection.apply, projection.init()),
+    register: (definition: any) => {
+      projection = definition
+      return Promise.resolve({ stateOf, readerFor: (session: Session) => () => stateOf(session), dispose: async () => {} })
+    },
+    stateOf,
   } }
   const listeners = new Map<string, Set<Listener>>()
   const subagents = {
@@ -68,7 +72,7 @@ function setup(config: Config = makeConfig()) {
     webServer: { register: vi.fn(() => () => {}) },
     subagents,
   }
-  apply(ctx, config)
+  const ready = apply(ctx, config)
   const emit = (name: string, ...args: unknown[]) => {
     for (const listener of listeners.get(name) ?? []) listener(...args)
   }
@@ -78,7 +82,7 @@ function setup(config: Config = makeConfig()) {
   const run = async (args: unknown, signal?: AbortSignal): Promise<string> => text(args, await execute(args, signal))
   const requestError = (agentId: string, code: string, message: string) =>
     emit('agent/request-error', { agent: { id: agentId }, failure: { code, message } }, () => undefined)
-  return { ctx, parent, services, subagents, execute, run, emit, requestError, tool: () => tool, listeners }
+  return { ctx, parent, services, subagents, execute, run, emit, requestError, tool: () => tool, listeners, ready }
 }
 
 const batch = { description: 'd', prompt_template: 'do {{item}}', items: ['a', 'b'] }
@@ -332,8 +336,9 @@ describe('resume path', () => {
   })
 })
 
-function withSession(config: Config) {
+async function withSession(config: Config) {
   const harness = setup(config)
+  await harness.ready
   const sessions = new SessionStore(new Context())
   harness.parent.session = sessions.create()
   harness.parent.steer = vi.fn()
@@ -345,14 +350,14 @@ describe('user-owned swarm mode', () => {
   const protectedConfig = () => makeConfig({ requireSwarmMode: volatile(true) as Config['requireSwarmMode'] })
 
   it('rejects before any spawn or message when the user has not enabled mode', async () => {
-    const h = withSession(protectedConfig())
+    const h = await withSession(protectedConfig())
     await expect(h.execute(batch)).rejects.toThrow('Only the user')
     expect(h.subagents.startActivation).not.toHaveBeenCalled()
     expect(h.subagents.sendMessage).not.toHaveBeenCalled()
   })
 
   it('supports on/off, repeated on, toggling and manual persistence across turn end', async () => {
-    const h = withSession(protectedConfig())
+    const h = await withSession(protectedConfig())
     expect(h.command('on').text).toContain('several times')
     const before = h.parent.session.seq
     expect(h.command('on').text).toContain('already on')
@@ -368,7 +373,7 @@ describe('user-owned swarm mode', () => {
   })
 
   it('sends a task and automatically exits at turn end without changing the static prompt', async () => {
-    const h = withSession(protectedConfig())
+    const h = await withSession(protectedConfig())
     h.command('review these files')
     expect(h.parent.steer).toHaveBeenCalledTimes(1)
     expect(h.parent.steer.mock.calls[0][0].content).toEqual([{ type: 'text', text: 'review these files' }])
@@ -385,7 +390,7 @@ describe('user-owned swarm mode', () => {
   })
 
   it('restores manual mode from plugin records but denies fork-created subagents', async () => {
-    const h = withSession(protectedConfig())
+    const h = await withSession(protectedConfig())
     h.command('on')
     const seed = JSON.parse(JSON.stringify(h.parent.session.snapshotEvents()))
     h.parent.session = h.sessions.create(undefined, { seed })
@@ -397,7 +402,7 @@ describe('user-owned swarm mode', () => {
   })
 
   it('retains legacy autonomous dispatch when requireSwarmMode is false', async () => {
-    const h = withSession(makeConfig())
+    const h = await withSession(makeConfig())
     await expect(h.execute(batch)).resolves.toHaveProperty('subagents')
     expect(h.subagents.startActivation).toHaveBeenCalledTimes(2)
   })

@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { appendPluginRecord, pluginRecordOf, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { ProjectionDefinition, ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import type { SwarmModeFrame } from './progress.ts'
@@ -20,17 +21,6 @@ declare module '@deepseek-ai/dsh-session/types' {
   interface PluginRecordMap {
     'plugin:dsh-kimicode-swarm/mode': SwarmModeState
   }
-}
-/** Narrow rc.5 runtime seam; the supplied SDK omits the projection package. */
-interface ModeProjectionRegistry {
-  register(definition: {
-    key: string
-    stateVersion: number
-    stateSchema: { parse(data: unknown): SwarmModeState }
-    init(): SwarmModeState
-    apply(state: SwarmModeState, event: SessionEvent): SwarmModeState
-  }): () => void
-  stateOf(session: Session, key: string): SwarmModeState | undefined
 }
 
 /** Validate restored data rather than inventing missing mode facts. */
@@ -66,16 +56,19 @@ const MODE_WARNING = 'Swarm mode may consume several times the tokens of a norma
   'Subagents cannot request extra approval; operations beyond their delegated permissions are rejected and must be handled by the parent agent.'
 
 export class SwarmModeController {
-  private readonly registry: ModeProjectionRegistry
+  private handle: ProjectionHandle<SwarmModeState> | undefined
+  readonly ready: Promise<void>
 
   constructor(ctx: Context, private readonly publish: (frame: SwarmModeFrame) => void) {
-    const registry = ctx.get('sessionProjections') as ModeProjectionRegistry | undefined
+    const registry = ctx.get('sessionProjections')
     if (registry === undefined) throw new Error('Swarm mode requires the host sessionProjections service.')
-    this.registry = registry
-    // rc.5 consumes only parse() on this seam. Reuse the strict record validator
-    // without adding a non-SDK runtime dependency on Zod.
-    const stateSchema = { parse: parseMode }
-    registry.register({ key: MODE_KEY, stateVersion: 1, stateSchema, init: initialMode, apply: foldMode })
+    // SessionProjectionRegistry only calls parse() on stateSchema; reuse the strict
+    // record validator without adding a non-SDK runtime dependency on Zod.
+    const stateSchema = { parse: parseMode } as unknown as ProjectionDefinition<typeof MODE_KEY, SwarmModeState>['stateSchema']
+    const registered = registry.register({ key: MODE_KEY, stateVersion: 1, stateSchema, init: initialMode, apply: foldMode })
+    this.ready = Promise.resolve(registered).then((handle) => {
+      this.handle = handle
+    })
     ctx.on('session/event', (session, event) => {
       if (event.type === 'turn/end' || pluginRecordOf(event)?.type === MODE_RECORD) this.announce(session)
     })
@@ -89,9 +82,10 @@ export class SwarmModeController {
   get(session: Session): SwarmModeState {
     // A fork child inherits parent records but never inherits user authorization.
     if (session.header.origin === 'subagent') return initialMode()
-    const state = this.registry.stateOf(session, MODE_KEY)
-    if (state === undefined) throw new Error(`Swarm mode projection is missing for session ${session.id}.`)
-    return state
+    if (this.handle === undefined) {
+      throw new Error(`Swarm mode projection is not ready for session ${session.id}; await plugin activation.`)
+    }
+    return this.handle.stateOf(session)
   }
 
   set(session: Session, trigger: SwarmModeState['trigger']): boolean {

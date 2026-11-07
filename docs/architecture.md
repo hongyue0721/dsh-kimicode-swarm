@@ -2,7 +2,7 @@
 
 ## 1. 权威与边界
 
-目标宿主为 DeepSeek Harness 0.2.1-rc.5；接口以已安装的宿主实现为准。用户行为和配置见
+目标宿主为 DeepSeek Harness 0.2.2-rc.1；接口以已安装的宿主实现为准。用户行为和配置见
 [README](../README.md)，已知限制及历史修复见 [KNOWN-ISSUES](KNOWN-ISSUES.md)。
 本文件负责模块职责、调度契约、进度协议和 Kimi 对照，不维护第二套配置说明。
 
@@ -44,9 +44,9 @@ flowchart LR
 工作流要求先少量探索；不需要拆分时告知用户并停止；否则在一个批次中派发互不重叠的任务，最多 128 项。
 rc.5 子 Agent 固定使用审批策略 `never`，无法申请额外审批；越权操作会拒绝，由父 Agent 处理，批次不会等待审批。
 
-提供的 SDK 未包含可直接导入的 session-projection 声明，因此该处声明了经过源码核对的窄运行时接口。
-rc.5 注册表对 `stateSchema` 仅调用 `parse()`，插件复用严格记录校验器，不增加非 SDK 的 Zod 依赖。
-宿主源码探针已验证第三方 plugin record、投影折叠和 JSON 种子恢复；真实 headless 进程重新加载也验证了磁盘恢复，见第 7 节。
+`@deepseek-ai/dsh-session-projection` 注册返回异步就绪的 `ProjectionHandle`，插件激活时等待其就绪并通过
+`handle.stateOf(session)` 读取状态；`stateSchema` 仅调用 `parse()`，插件复用严格记录校验器，不增加非 SDK 的 Zod 运行时依赖。
+宿主源码探针与真实 `SessionProjectionRegistry` 单测已验证第三方 plugin record、投影折叠和 JSON 种子恢复；真实 headless 进程重新加载也验证了磁盘恢复，见第 7 节。
 
 ### 2.2 工具与子 Agent
 
@@ -164,7 +164,7 @@ interface SwarmProgressFrame {
 
 ## 7. 测试与验收
 
-测试命令为 `pnpm typecheck`、`pnpm test`、`pnpm build`，调度数字用 `pnpm bench` 复现。当前 159 个单元测试覆盖模式、门槛、
+测试命令为 `pnpm typecheck`、`pnpm test`、`pnpm build`，调度数字用 `pnpm bench` 复现。当前 160 个单元测试覆盖模式、门槛、
 fork 冲突、预设四条规则、发布容量种子和全局退避、进度节流/补发、Origin、客户端会话过滤和交互。
 客户端单测以平台组件及快照 store 替身验证产品逻辑，不能代替真实宿主验收：它们测不出未声明的宿主服务，
 这类错误只在真实上下文访问时才抛出。

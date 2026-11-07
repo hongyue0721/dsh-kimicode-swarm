@@ -346,7 +346,7 @@ async function presetResolver(ctx: Context, config: Config): Promise<PresetResol
  * @param config - loader-resolved plugin config.
  */
 export const inject = ['systemPrompt', 'tools', 'subagents', 'commands', 'webServer', 'sessionProjections']
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!config.enabled) return
 
   // Live progress transport. Progress is display-only, so it never enters the
@@ -365,6 +365,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.tools.register(swarmTool(ctx, config, broadcaster, mode)), 'dsh-swarm: tool')
   ctx.effect(() => ctx.webServer.register(progressRoute(broadcaster)), 'dsh-swarm: progress route')
   ctx.effect(() => ctx.commands.register(mode.command()), 'dsh-swarm: command')
+  await mode.ready
 }
 
 /** Build the `swarm_batch` tool definition against the live settings source. */
