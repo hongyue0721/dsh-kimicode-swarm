@@ -1,12 +1,10 @@
-# 架构与设计契约
+# 架构设计
 
-## 1. 权威与边界
+## 1. 概览
 
-目标宿主为 DeepSeek Harness 0.2.2-rc.1；接口以已安装的宿主实现为准。用户行为和配置见
-[README](../README.md)，已知限制及历史修复见 [KNOWN-ISSUES](KNOWN-ISSUES.md)。
-本文件负责模块职责、调度契约、进度协议和 Kimi 对照，不维护第二套配置说明。
+本插件面向 DeepSeek Harness（0.2.2-rc.1），提供批量并行子 Agent 调度与聊天内实时进度面板。安装、使用与配置说明请参考 [README](../README.md)，平台说明与版本变更记录请参考 [KNOWN-ISSUES](KNOWN-ISSUES.md)。本文档介绍插件的核心模块职责、自适应调度机制、进度同步协议，以及与 Kimi Code Agent Swarm 的设计对照。
 
-## 2. 运行架构
+## 2. 运行时架构
 
 ```mermaid
 flowchart LR
@@ -29,81 +27,63 @@ flowchart LR
   Config[configForms 与模型目录] --> Settings[SwarmSettingsCard]
 ```
 
-### 2.1 模式与提示
+### 2.1 会话模式与提示词注入
 
-`SwarmModeState` 为 `{ active, trigger: 'manual' | 'task' | null, everActive }`。用户命令写入
-`appendPluginRecord(session, 'plugin:dsh-kimicode-swarm/mode', state)`，记录携带完整状态并标记
-`ignorable: true`。投影折叠记录；`turn/end` 只清除 task 模式，manual 模式保持。
-缺失投影或无效记录直接报错，不静默恢复为关闭状态。
+会话模式状态定义为 `SwarmModeState`（`{ active, trigger: 'manual' | 'task' | null, everActive }`）。当用户执行 `/swarm` 系列命令时，插件通过 `appendPluginRecord(session, 'plugin:dsh-kimicode-swarm/mode', state)` 写入完整状态记录（标记 `ignorable: true`），并由 `@deepseek-ai/dsh-session-projection` 折叠还原当前状态：
 
-普通会话的恢复和 fork 可继承模式；`session.header.origin === 'subagent'` 的委派会话始终读取为未开启。
-这是必要的授权隔离：fork provider 会复制父日志，单纯折叠日志会误把父用户的授权授予子 Agent。
-子会话命令也拒绝开启模式。`requireSwarmMode: false` 是用户明确选择的旧行为，跳过模式门槛。
+- `manual` 模式（`/swarm on`）跨回合保持开启，直至用户主动关闭；
+- `task` 模式（`/swarm <任务>`）在当前回合结束（`turn/end`）时自动退出。
 
-静态 `SWARM_GUIDANCE` 宣告默认门槛，动态工作流放在 `systemPrompt.context`，模式切换不重写系统提示 section。
-工作流要求先少量探索；不需要拆分时告知用户并停止；否则在一个批次中派发互不重叠的任务，最多 128 项。
-rc.5 子 Agent 固定使用审批策略 `never`，无法申请额外审批；越权操作会拒绝，由父 Agent 处理，批次不会等待审批。
+普通会话在恢复或 fork 时会保留模式状态；而由子 Agent 派生的委派会话（`session.header.origin === 'subagent'`）始终读取为未开启，且不响应 `/swarm` 开启命令。这样即使 `fork` provider 复制了父会话日志，子 Agent 也不会继承父会话的派发开关，从根源上避免递归触发 Swarm。若用户在配置中将 `requireSwarmMode` 设为 `false`，则跳过模式门槛检查。
 
-`@deepseek-ai/dsh-session-projection` 注册返回异步就绪的 `ProjectionHandle`，插件激活时等待其就绪并通过
-`handle.stateOf(session)` 读取状态；`stateSchema` 仅调用 `parse()`，插件复用严格记录校验器，不增加非 SDK 的 Zod 运行时依赖。
-宿主源码探针与真实 `SessionProjectionRegistry` 单测已验证第三方 plugin record、投影折叠和 JSON 种子恢复；真实 headless 进程重新加载也验证了磁盘恢复，见第 7 节。
+提示词分为两层：静态 `SWARM_GUIDANCE` 声明工具用途与默认开启方式，动态工作流指令通过 `systemPrompt.context` 按需注入，切换模式时无需重写系统提示词主体。工作流引导主 Agent 先做必要的轻量探索，确认适合并行拆解后再通过单次 `swarm_batch` 派发互不重叠的子任务（最多 128 项）。由于宿主将子 Agent 的审批策略固定为 `never`，超出委派权限的操作会直接返回给父 Agent 处理，整批任务不会因等待交互式审批而挂起。
 
-### 2.2 工具与子 Agent
+### 2.2 工具执行与子 Agent 生命周期
 
-- `defineTool` 输出结构化 `{ subagents: [...] }`；模型 XML 和 `presentationMeta` 都从它投影，不做 XML 反解析。
-- `isConcurrencySafe: () => false` 声明独占调度屏障。它不与同响应其他工具重叠，多个 swarm 也顺序执行。
-  这是与 Kimi 的有意差异：Kimi 否决含其他工具的响应，DSH 使用原生屏障保留同响应调用的执行顺序。
-- 激活使用 `ctx.subagents.startActivation({ provider, label, request, signal, delivery: 'caller' })`。
-  发布前取消由 signal 控制，发布后通过 `activation.dispose()` 停止；结果只交给工具，不重复通知父 Agent。
-- 续做使用 `sendMessage(parent, childId, content, { signal })`，先监听 `subagent/end` 再投递，避免丢失结束边沿。
-  投递接受不等于完成；取消走 `interrupt`。限流后继续同一子 Agent，保留既有工作。
-- `fork: true` 使用常量 `FORK_PROVIDER = 'fork'`。宿主只复制上一个 `turn/end` 及之前的平衡历史，当前回合不复制。
-  归一化拒绝 fork 与 resume、整批/单项 model、单项 type、subagent_type 的组合；空映射也算传入 resume。
-  fork 不走模型映射，不传 `agentOptions` 或 `agentPreset`；provider 缺失直接报错，不降级为 spawn。
+- **统一结构化输出**：`defineTool` 返回结构化的 `{ subagents: [...] }` 数据，供模型读取的 XML 结果与供前端渲染的 `presentationMeta` 均由该数据直接投影生成。
+- **独占调度屏障**：工具声明 `isConcurrencySafe: () => false`，借助 DSH 原生的独占屏障确保 `swarm_batch` 不与同一响应中的其他工具并发重叠，多个批次之间也严格按顺序执行。
+- **创建与取消**：新子任务通过 `ctx.subagents.startActivation({ provider, label, request, signal, delivery: 'caller' })` 启动。发布前取消由 `signal` 控制，发布后通过 `activation.dispose()` 终止；结果统一汇总至当前工具调用，避免向父会话重复投递通知。
+- **断点续做（Resume）**：续做任务调用 `sendMessage(parent, childId, content, { signal })`，在消息投递前先挂载 `subagent/end` 监听以确保完整捕获结束事件，取消时触发 `interrupt`。遇到 429 限流重试时同样复用原 `agent_id` 继续执行，保留子 Agent 已完成的探索与上下文。
+- **上下文派生（Fork）**：传入 `fork: true` 时使用宿主的 `fork` provider，复制截至上一已完成回合（`turn/end`）的对话历史。参数归一化阶段将 `fork` 与 `resume_agent_ids`、`model`、`type`、`subagent_type` 设为互斥，直接沿用父会话的模型与上下文配置。
 
-### 2.3 预设与模型
+### 2.3 预设与模型解析
 
-异步读取可选的 `ctx.get('agentPresets').list()`，在进入调度前完成解析；纯逻辑 normalize 仅接收解析器。
+进入调度器前，插件异步读取宿主可选的 `ctx.get('agentPresets').list()` 注册表，并按以下规则解析 `subagent_type` 与目标模型：
 
-1. 未显式传类型：不传 `agentPreset`，继承父 Agent 的组合；标签 `coder` 仍参与模型映射。
-2. 显式值是预设 ID：传 `agentPreset`；预设已损坏时明确报错。
-3. 否则命中映射表类型：仅作为模型标签，不改变工具或角色。
-4. 均不匹配：报错并列出预设 ID 和映射类型。没有注册表时第 2 条不可用。
+1. **未显式指定类型**：不传 `agentPreset`，子 Agent 继承父 Agent 的工具与角色组合；同时默认携带 `coder` 标签参与模型映射表匹配。
+2. **匹配宿主预设 ID**：传入对应的 `agentPreset` 以应用预设的角色与工具集。
+3. **匹配模型映射表标签**：仅将标签用于路由对应的 `provider` 与 `model`，保持父 Agent 的工具与角色不变。
+4. **均不匹配**：返回清晰的错误提示，并列出当前可用的预设 ID 与映射标签。
 
-spawn 的模型顺序保持 item 显式值 > 整批显式值 > 启用的类型映射 > 父模型。
-宿主将 `agentOptions` 路由和预设组合分别处理，因此显式模型可与预设同时使用。
-仅在选择了模型时传 `agentOptions`，provider 缺失时不传该键，避免显式 undefined 覆盖继承值。
+对于 `spawn` 模式，模型选择的优先级从高到低依次为：单项 `item.model` > 整批 `model` > 启用状态下的类型映射表 > 继承父 Agent 模型。由于宿主将 `agentOptions` 模型路由与 `agentPreset` 独立处理，显式指定模型可与预设组合搭配使用。
 
-## 3. 调度合约
+## 3. 调度器设计
 
-`SpawnFn(task, signal, { retryAgentId, onStarted })` 隔离宿主依赖，测试注入时钟及启动函数。
-`onStarted` 表示子 Agent 已发布或续做消息已接受，不把尝试次数当作发布成功数。
+调度器（`src/core/scheduler.ts`）通过 `SpawnFn(task, signal, { retryAgentId, onStarted })` 与宿主解耦，支持在测试与基准脚本中注入虚拟时钟。`onStarted` 在子 Agent 正式激活或续做消息被宿主接收时回调，用于精确追踪实际运行中的并发度。
 
-**正常阶段**：默认立即启动 5 项，再每 700ms 增加 1 项。插件可另设并发上限；宿主
-`maxActiveSubagents`（默认 8）始终有效。`ACTIVATION_LIMIT_REACHED` 作为背压处理：排回队列，
-等待运行中任务结束；没有本批运行任务时定时重试，不把宿主容量拒绝当成任务失败。
+### 正常阶段与背压控制
 
-**限流阶段**：
+批次启动时默认立即派发前 5 个任务，随后每 700ms 递增派发 1 个任务，平滑拉起并发。运行数受插件 `maxConcurrency` 与宿主 `maxActiveSubagents`（默认 8）共同约束。当触发宿主并发上限（`ACTIVATION_LIMIT_REACHED`）时，调度器将其作为背压信号处理：把当前任务放回队首，等待运行中任务结束释放槽位（若当前批次无运行中任务则定时重试），保证高并发场景下队列平稳推进。
 
-- 只识别 `agent/request-error` 的结构化 `failure.code === 'RATE_LIMIT'`，不匹配错误文本。
-- 容量种子为 `max(1, max(1, startedSuccessCount) - 1)`，其中成功数只在限流阶段以外的 `onStarted` 增加。
-  排队任务和未发布尝试不影响容量。后续限流至多每 2 秒收缩 1，下限为 1。
-- 单项个人等待从 3 秒按 2 倍增长，保留既有 5 分钟个人延迟上限；限流任务回到队首。
-- 全局 `globalRetryIntervalMs` 起始 3 秒。未发布就限流时翻倍，且不小于个人等待；成功发布/接受续做时重置为 3 秒。
-- 每次调度最多启动一项；进入限流模式后不再退出。距上次限流及上次恢复均至少 3 分钟时，容量恢复 1。
-- 保留 `maxRateLimitRetries = 8`；唯一未完成的任务再次限流时直接失败。Kimi 不设该重试上限，持续耗尽配额时可能互相等待。
+### 限流退避与恢复
 
-**取消与超时**：已完成结果保留；未完成项按是否发布区分 `started/not_started`，有 ID 的任务可以续做。
-宿主会替换取消后正常返回的值，因此取消时抛出带 XML 结果的错误，保留模型下一轮可见的工作与 ID。
-单任务超时只失败该任务，不停止其他任务。工具 XML 中和封套标签，防止子 Agent 文本伪造结果边界。
+当宿主发出 `agent/request-error` 且 `failure.code === 'RATE_LIMIT'` 时，调度器切入限流退避模式：
 
-## 4. 进度协议与边界
+- **并发窗口收缩**：初始限流容量设为 `max(1, max(1, startedSuccessCount) - 1)`（基于限流前实际成功启动的任务数计算），后续若继续触发限流，每 2 秒至多再缩减 1，最低保持为 1。
+- **个体与全局退避**：受限流的单个任务从 3 秒起按指数退避（上限 5 分钟）并排回队首；全局派发间隔 `globalRetryIntervalMs` 同样从 3 秒起步，若任务在启动阶段即遭遇限流则翻倍递增，一旦有任务成功激活则重置回 3 秒。
+- **稳态爬坡与重试上限**：限流模式下每次调度仅启动 1 个任务；若距离上一次限流及上一次扩容均已满 3 分钟，则将并发容量加 1。单个任务最多进行 8 次限流重试（`maxRateLimitRetries = 8`）；若批次中仅剩最后一个未完成任务且再次触发限流，则直接结束并返回详情，避免无限期挂起。
 
-进度是展示数据，不写入会话日志；模式是低频、持久的 plugin record，两者生命周期不同。
+### 取消与超时处理
+
+当用户取消批次时，已完成子任务的结果保持不变，未完成任务按实际状态标记为 `started`（附带 `agent_id` 供后续 `resume_agent_ids` 续做）或 `not_started`。为避免宿主在取消时丢弃普通返回值，工具通过抛出包含序列化 XML 的异常将已完成进度和 `agent_id` 传递给下一轮对话。单个子任务超时仅终止该子任务本身，不影响同批次其他任务继续运行。
+
+## 4. 实时进度协议
+
+运行进度作为实时展示状态通过内存与 SSE 流分发，会话模式则作为持久化 plugin record 存储在会话日志中：
 
 ```ts
 interface SwarmProgressFrame {
-  sessionId: string // 父 Agent ID
+  sessionId: string // 父会话 ID
   callId: string
   subagents: Array<{
     index: number
@@ -122,59 +102,43 @@ interface SwarmProgressFrame {
 }
 ```
 
-- `event: progress` 为保持输入顺序的全量快照，普通更新按调用合并 250ms，终态变化立即发送。
-  `item` 只在帧序列化时截到 200 字符，最终结构化结果保留完整值。
-- `tools/result` 按 `exec.agent.id` 匹配本批已发布、仍运行的子 Agent，累计已完成工具数及最近工具名。
-  时间使用宿主进程时钟；未发布的项不编造启动时间或 ID。终态元数据保留时间和活动统计。
-- `event: progress-end` 携带 `{ callId, sessionId }`，只释放对应父会话的快照；`event: mode` 为 `{ sessionId, active, trigger }`。
-  新连接补发运行快照和所有已知 active 会话；共享心跳为 15 秒。
-- EventSource 瞬断由浏览器自动重连，彻底关闭时指数退避重开。重连清除旧模式缓存，再接收 active 补发，避免遗漏关闭事件后徽标残留。
-- 请求带 Origin 且其 host 与 Host 不同时返回 403；无 Origin 的请求可以连接。
-  **这不是身份认证**：服务端仍向同源连接广播全部会话，客户端按 sessionId 过滤；不能作为多用户授权隔离。
+- **快照节流与终态直达**：`event: progress` 发送保持输入顺序的全量快照；常规状态更新按 `callId` 以 250ms 窗口合并发送，任务进入终态时立即推送。快照中 `item` 描述截断至 200 字符以控制传输体积，最终工具结果保留完整文本。
+- **工具活动追踪**：监听 `tools/result` 事件并按 `exec.agent.id` 关联当前批次运行中的子 Agent，实时累加工具调用次数并记录最近一次执行的工具名。
+- **生命周期管理**：批次结束时发送 `event: progress-end`（携带 `{ callId, sessionId }`）释放对应快照；模式变更时广播 `event: mode`（`{ sessionId, active, trigger }`）。新建立的 SSE 连接会立即收到当前活跃批次的快照与已开启 Swarm 模式的会话列表，并通过 15 秒共享心跳保活。
+- **断线重连**：浏览器端 `EventSource` 瞬时断开时自动重连，连接完全关闭时按指数退避重新建立连接，并在重连后同步最新会话模式状态。
+- **同源校验**：`/swarm-events` 路由校验请求头中的 `Origin` host 与 `Host` 是否匹配（拒绝跨站访问），同时支持无 `Origin` 头的本地客户端连接；前端 store 按 `sessionId` 过滤并渲染当前会话的进度卡片。
 
-## 5. 客户端
+## 5. 前端界面与设置面板
 
-卡片使用平台 `StateDot`、`DisclosureRow`、`Tag`、`Tooltip`、`TextShimmer` 和 `MarkdownText`。
-列表约 320px 高并滚动，超过 8 行提供全部/运行中/失败筛选；memo 行比较全量快照字段，只有忙碌行随秒表刷新。
-定时器仅在调用运行时存在；全完成默认折叠，首个失败项默认展开。所有 disclosure 使用 owner 的 hook，跟随宿主回合折叠重置。
+聊天区卡片（`SwarmCard`）基于宿主 UI 原语（`StateDot`、`DisclosureRow`、`Tag`、`Tooltip`、`TextShimmer`、`MarkdownText`）构建：
 
-取消态保留已收到的状态行，原始结果默认折叠；刷新后没有行快照时仍折叠展示原始结果。
-启动前拒绝且无元数据/进度时只显示紧凑提示。子会话跳转使用宿主工作区或侧栏服务；缺少这些可选服务时不显示按钮。
-徽标注册在 `conversation.input.left`，通过 `remote.commands.execute(sessionId, '/swarm off', [])` 关闭。
+- 列表区域最大高度约 320px 并支持内部滚动，子任务超过 8 项时自动显示「全部 / 运行中 / 失败」筛选器；
+- 行组件通过 `memo` 对比快照字段，仅运行中或限流倒计时的行随秒表刷新；
+- 批次全部完成时默认折叠详情，若存在失败项则自动展开首个失败子任务；
+- 支持一键跳转至子 Agent 会话（自动适配宿主工作区或右侧栏导航服务）；
+- 输入区左侧挂载 `SwarmBadge`，点击即调用 `/swarm off` 关闭模式；
+- 插件设置页（`SwarmSettingsCard`）提供配置开关与模型映射表编辑，所有样式基于宿主 `--dsw-*` CSS 变量并遵循 `prefers-reduced-motion` 无障碍偏好。
 
-配置页使用原生复选框、输入和按钮；映射草稿不被其他字段保存覆盖，空类型/模型不能保存，目录缺失值仍显示。
-`locale.register/bind` 提供中英文，样式只引用宿主 `--dsw-*` 变量并尊重 reduced-motion。
-`build/web-platform.ts` 统一平台模块身份；原生 primitives 与 store 在浏览器 bundle 中保持 external。
+## 6. 与 Kimi Code 的设计对照
 
-## 6. Kimi 对照
-
-| 能力 | Kimi Code | 本插件 |
+| 维度 | Kimi Code | dsh-kimicode-swarm |
 |---|---|---|
-| 批量与上限 | AgentSwarm，最多 128 | `swarm_batch`，最多 128 |
-| 启动门槛 | 用户开启模式 | 默认用户开启，可显式配置旧行为 |
-| 独占 | 否决非唯一工具调用 | DSH 原生独占屏障，保留调用顺序 |
-| fork | 实验性参数 | 宿主 fork provider，只复制已完成回合 |
-| 类型 | 子 Agent 类型 | spawn 预设 ID 优先，其次映射标签 |
-| 模型 | primary/secondary 实验 | 每项/整批显式模型、映射、父模型 |
-| 容量与全局退避 | 成功发布数减一，未发布限流翻倍 | 对齐；进入限流后保持该模式 |
-| 持续限流 | 无重试上限 | 最多 8 次，保留个人延迟 5 分钟上限 |
-| 失败续做 | resume_agent_ids | 同一子 Agent 接收消息并等待结束 |
-| 进度界面 | TUI 状态行 | 原生 Web 卡片、模式徽标、SSE 快照 |
-| 写冲突 | 语义拆分，无文件锁 | 同，任务需互不重叠 |
+| 批量规模上限 | `AgentSwarm`，单批最多 128 项 | `swarm_batch`，单批最多 128 项 |
+| 触发门槛 | 需用户开启 Swarm 模式 | 默认需用户开启，支持配置为自动允许 |
+| 工具独占方式 | 拒绝包含其他工具的同回合响应 | 使用 DSH 原生独占屏障，保留同回合调用顺序 |
+| 上下文派生（Fork） | 实验性参数 | 接入宿主 `fork` provider，继承已完成回合历史 |
+| 子 Agent 类型 | 内置子 Agent 类型 | 优先匹配宿主预设 ID，其次匹配模型映射标签 |
+| 模型分配 | 主/次模型切换 | 支持单项指定、整批指定、类型映射表与父模型继承 |
+| 限流退避与恢复 | 并发减一、指数退避、3 分钟冷却恢复 | 对齐核心算法，进入限流模式后保持稳态调度 |
+| 持续限流保护 | 无限重试 | 单任务最多重试 8 次（单次退避上限 5 分钟） |
+| 断点续做 | `resume_agent_ids` | 向同一子 Agent 投递消息并等待新回合完成 |
+| 进度交互界面 | 终端 TUI 状态行 | Web 原生进度卡片、输入区模式徽标、SSE 实时流 |
+| 工作区并发 | 共享目录，按任务语义拆分规避冲突 | 相同，建议按文件或模块边界拆分写入任务 |
 
-## 7. 测试与验收
+## 7. 测试与验证
 
-测试命令为 `pnpm typecheck`、`pnpm test`、`pnpm build`，调度数字用 `pnpm bench` 复现。当前 160 个单元测试覆盖模式、门槛、
-fork 冲突、预设四条规则、发布容量种子和全局退避、进度节流/补发、Origin、客户端会话过滤和交互。
-客户端单测以平台组件及快照 store 替身验证产品逻辑，不能代替真实宿主验收：它们测不出未声明的宿主服务，
-这类错误只在真实上下文访问时才抛出。
+项目包含 160 个单元测试与端到端集成验证：
 
-真实宿主验收（DSH 0.2.1-rc.5，临时 `DSH_HOME`，本地 HTTP 假模型，无头 Chromium，浅色和深色）确认：
-模式关闭时拒绝且没有子 Agent 请求、`/swarm on` 与徽标关闭、运行中的进度和工具活动、页面刷新后进度恢复、
-限流倒计时及 429 后接续同一子 Agent、失败行、完成态与 Markdown 结果、子会话跳转、取消中断请求、配置页读写、
-跨站 Origin 被拒绝。headless 下确认了 task 回合结束退出、fork 继承已完成历史及拒绝嵌套、模式磁盘恢复。
-调大 `maxActiveSubagents` 后 12 个任务全部在第一个任务结束前启动。
-
-真实 DeepSeek 模型（默认 Flash）跑通一次 `/swarm <任务>`：4 个子 Agent 各调用一次 `read` 工具后全部完成，回合结束后模式自动退出；用量 80.7K token，缓存命中 97%。模式关闭时模型收到拒绝后会提示用户开启。
-
-未实机验证：真实服务商的 429 与容量恢复、超时触发、128 项规模、`/swarm-events` 断线重连。这些由单元测试覆盖。
+- **单元与组件测试（`pnpm test`）**：覆盖会话模式命令与投影恢复、子会话隔离、`fork` 参数互斥校验、预设与模型四级解析、自适应调度与限流退避曲线、SSE 快照节流与重连补发、`Origin` 跨站拦截，以及前端卡片的筛选、折叠与多会话过滤。
+- **调度基准测试（`pnpm bench`）**：基于虚拟时钟模拟不同任务规模与宿主并发上限下的调度耗时。
+- **宿主实机验证**：在 DeepSeek Harness Web 与 Headless 环境下验证了模式开关与徽标联动、并发爬坡与 `maxActiveSubagents` 扩容、429 限流倒计时与原会话续做、中途取消与结果保留、子会话跳转、页面刷新状态恢复及真实 DeepSeek 模型下的多子 Agent 协同执行。

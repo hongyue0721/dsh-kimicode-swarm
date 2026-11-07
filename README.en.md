@@ -20,44 +20,44 @@
 
 ---
 
-Brings **Kimi Code's Agent Swarm** to DeepSeek Harness. Turn on Swarm mode and the main agent splits the work into independent subtasks, dispatches up to 128 subagents in parallel, and merges the results. You can watch what each subagent is doing, live, right in the chat.
+Inspired by **Kimi K2.5 Agent Swarm** and **Kimi Code**, this plugin brings batch-parallel subagent orchestration to DeepSeek Harness. Turn on Swarm mode and the main agent decomposes large tasks into independent work items, dispatches up to 128 subagents in parallel, and synthesizes their findings — while you watch every subagent's live progress right in the chat.
 
 <p align="center">
   <img src="./assets/swarm-card-running.light.png" alt="A running Swarm card: segmented progress bar, each subagent's tool activity, elapsed time and rate-limit countdown" width="85%" />
 </p>
 
-## Highlights
+## Key Features
 
-- **A model per subtask**: any item can name its own model, so the expensive one goes to the hard tasks.
-- **Rate limits handle themselves**: automatic backoff that continues the same subagent, at most 8 retries per task. An exhausted quota fails clearly instead of hanging.
-- **Cancelling keeps the work**: finished results stay visible to the model on its next turn, and unfinished subagents resume by `agent_id` with their history.
-- **You control the bill**: by default nothing dispatches until you turn Swarm mode on, so an agent can't start a hundred subagents by itself.
-- **Native UI**: segmented progress, tool activity, rate-limit countdowns, one click into a child session and Markdown results, following DSH's language and light or dark theme.
-- **Dispatch with context**: `fork: true` starts subagents with the current conversation history.
-- **No runtime dependencies**: everything it needs comes from the host.
+- **Per-subtask model routing**: Assign a specific model to individual items or the entire batch so you can save frontier models for the hardest subtasks.
+- **Adaptive concurrency & rate-limit recovery**: Gradual ramp-up with automatic exponential backoff and concurrency window scaling on `429` responses, resuming the same subagent once the cooldown expires (up to 8 retries per task).
+- **Graceful cancellation & resume**: Stop a running batch at any time — completed subagent outputs remain available to the main agent, and unfinished subtasks can resume from where they left off via `agent_id`.
+- **Opt-in dispatch control**: By default, Swarm batches only run when you enable Swarm mode via `/swarm`, keeping token usage predictable.
+- **Native in-chat panel**: Segmented progress bar, live tool activity indicators, rate-limit countdowns, one-click navigation into child sessions, and collapsible Markdown results — following DSH's locale and light/dark themes.
+- **Context forking**: Pass `fork: true` to start subagents with the conversation history accumulated up to the previous turn.
+- **Zero runtime dependencies**: Built entirely on host-provided plugin APIs and UI primitives.
 
-## How fast
+## Scheduling Performance
 
-Scheduling speedup over running one at a time, for independent tasks of a fixed duration:
+Theoretical scheduling speedup compared to serial execution for independent tasks of fixed duration:
 
-| Tasks | Host concurrency limit | Serial | Swarm | Speedup |
+| Workload | Host concurrency limit | Serial | Swarm | Speedup |
 |---|---|---|---|---|
-| 128, 5 minutes each | 128 | 38400 s | 386 s | **99.5x** |
-| 128, 60 seconds each | 128 | 7680 s | 146 s | 52.6x |
-| 20, 60 seconds each | 128 | 1200 s | 71 s | 17x |
-| 128, 60 seconds each | 8 (default) | 7680 s | 965 s | 8x |
+| 128 tasks, 5 minutes each | 128 | 38400 s | 386 s | **99.5x** |
+| 128 tasks, 60 seconds each | 128 | 7680 s | 146 s | 52.6x |
+| 20 tasks, 60 seconds each | 128 | 1200 s | 71 s | 17x |
+| 128 tasks, 60 seconds each | 8 (default) | 7680 s | 965 s | 8x |
 
-This is a scheduling simulation on a virtual clock, and `pnpm bench` reproduces it. It excludes provider rate limits and says nothing about token cost; real speed depends on your tasks and provider. **The default limit caps the speedup at 8x.** Going faster means raising `maxActiveSubagents` (see [Configuration](#configuration)). Parallel work also uses more tokens.
+These figures come from a virtual-clock scheduler benchmark that you can reproduce with `pnpm bench`. Actual wall-clock time and token usage depend on task complexity and provider rate limits. By default, DSH runs up to 8 subagents concurrently (up to an 8x speedup); raise `maxActiveSubagents` in [Configuration](#configuration) to scale higher.
 
-## Quick start
+## Quick Start
 
-Verified on DeepSeek Harness **0.2.2-rc.1** (and 0.2.1-rc.5). DSH's plugin APIs are still moving quickly, so other versions are untested. Versions of this plugin before 0.2.0 do not support DSH 0.2.x.
+Built for DeepSeek Harness **0.2.2-rc.1** (compatible with 0.2.1-rc.5; for DSH 0.1.x, install version `0.1.2` of this plugin).
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm
 ```
 
-Restart `dsh web` and try this in a new session:
+Restart `dsh web` and run a command in a new session:
 
 ```text
 /swarm Review each module under src/ and suggest fixes for each
@@ -65,51 +65,51 @@ Restart `dsh web` and try this in a new session:
 
 ## Usage
 
-### Swarm mode
+### Swarm Mode
 
 | Command | Effect |
 |---|---|
-| `/swarm` | Toggle the mode |
-| `/swarm on` / `/swarm off` | Keep it on or turn it off; the mode is saved with the session |
-| `/swarm <task>` | On for this task only; it ends with the turn |
+| `/swarm` | Toggle Swarm mode for the current session |
+| `/swarm on` / `/swarm off` | Enable or disable persistently (saved with the session) |
+| `/swarm <task>` | Enable for a single turn and exit automatically when the turn ends |
 
-While the mode is on, a Swarm badge appears in the input area, and clicking it turns the mode off. Subagents cannot dispatch further swarms.
+While Swarm mode is active, a Swarm badge appears in the chat input bar — click it anytime to turn the mode off. To prevent recursive fan-out, subagents cannot dispatch nested swarms.
 
-Subagents cannot request extra approval (DSH pins their approval policy to `never`). Operations beyond their delegated permissions are rejected and left to the parent agent, so a batch never stops to wait for approval. The plugin does not change your permission mode.
+Subagents run within the permissions delegated by the current session without pausing mid-batch for interactive approval prompts; any operation requiring elevated permissions is handed back to the main agent so the batch keeps moving.
 
-### Choosing models
+### Model Selection
 
-From highest priority to lowest: `model` on an item or the batch, then the mapping table on the settings page, then the caller's model.
+Model resolution follows this priority order (highest to lowest): explicit `model` on an item or batch > type mapping table in plugin settings > caller's current model.
 
 ```json
 { "item": "src/core/scheduler.ts", "model": "deepseek-v4-pro" }
 ```
 
-### `swarm_batch` parameters
+### `swarm_batch` Parameters
 
 | Parameter | Description |
 |---|---|
-| `description` | Short description of the whole swarm |
-| `prompt_template` | Prompt with a `{{item}}` placeholder; required with `items` |
-| `items` | 2 to 128 entries (fewer with `resume_agent_ids`), each a `string` or `{ item, model?, type? }` |
-| `model` | Model for the whole batch; overrides the mapping table |
-| `subagent_type` | Matches a registered agent preset, then a mapping-table label, and errors if neither matches; omit it to inherit from the parent |
-| `fork` | Inherit the conversation up to the last completed turn; cannot combine with `resume_agent_ids`, `model`, `type` or `subagent_type` |
-| `resume_agent_ids` | Map of `agent_id` to prompt that continues existing subagents, started before new tasks |
+| `description` | Brief summary of the swarm batch |
+| `prompt_template` | Prompt template containing a `{{item}}` placeholder (required when `items` is provided) |
+| `items` | 2 to 128 entries (fewer allowed when combined with `resume_agent_ids`), each a `string` or `{ item, model?, type? }` |
+| `model` | Model override for the entire batch (takes precedence over the mapping table) |
+| `subagent_type` | Matches a registered host agent preset first, then a mapping-table label; omit to inherit from the parent agent |
+| `fork` | Start subagents with the conversation history up to the last completed turn (mutually exclusive with `resume_agent_ids`, `model`, `type`, and `subagent_type`) |
+| `resume_agent_ids` | Map of `agent_id` to follow-up prompt to continue existing subagents, prioritized ahead of new items |
 
-`fork` suits subtasks that need context, but every subagent carries the full history, so it costs more tokens.
+Use `fork` when subtasks depend on prior conversation context; since each forked subagent carries the full conversation history, consider context length when dispatching large batches.
 
 ## Configuration
 
-Model mapping, timeout and concurrency can be edited in the web UI under Plugins → dsh-kimicode-swarm, and apply to the next dispatch. They are stored with the profile entry (`~/.dsh/profiles/<profile>/cordis.patch.yml`):
+Model mappings, timeouts, and per-batch concurrency limits can be configured in the web UI under **Plugins → dsh-kimicode-swarm** and take effect on the next dispatch. Settings are stored in your profile configuration (`~/.dsh/profiles/<profile>/cordis.patch.yml`):
 
 ```yaml
 - id: dsh-kimicode-swarm
   name: dsh-kimicode-swarm
   config:
-    requireSwarmMode: true      # false lets the agent call it by itself
-    timeoutMs: 7200000          # per-subagent timeout, 2 hours by default, 0 for none
-    maxConcurrency: 0           # per-batch cap, 0 adds no cap
+    requireSwarmMode: true      # set false to allow the agent to dispatch without /swarm
+    timeoutMs: 7200000          # per-subagent timeout (2 hours by default, 0 for no limit)
+    maxConcurrency: 0           # plugin-level per-batch cap (0 for no extra limit)
     modelMappingEnabled: false
     modelMapping:
       - type: explore
@@ -117,9 +117,9 @@ Model mapping, timeout and concurrency can be edited in the web UI under Plugins
         model: deepseek-v3
 ```
 
-`enabled` and `announceToAgent` (both `true` by default) are read when the plugin mounts. They can only be changed in this entry, which remounts the plugin.
+`enabled` and `announceToAgent` (both `true` by default) are read when the plugin mounts; updating them in the profile configuration remounts the plugin automatically.
 
-**Want it faster?** The host runs at most 8 subagents at once and queues the rest. To raise that, use DSH's subagent settings page or set `maxActiveSubagents` on the profile's `subagent` entry:
+**Scaling concurrency**: The host activates at most 8 concurrent subagents by default and queues the rest. To increase this ceiling, adjust the limit on DSH's Subagent settings page or configure `maxActiveSubagents` on the profile's `subagent` entry:
 
 ```yaml
 - id: subagent
@@ -128,26 +128,26 @@ Model mapping, timeout and concurrency can be edited in the web UI under Plugins
     maxActiveSubagents: 32
 ```
 
-## Known limitations
+## Usage Notes
 
-- **Needs the web layer**: the plugin depends on the `webServer` service, so it does not activate in profiles without one, such as `tui` and `headless`.
-- **The progress channel is not an auth boundary**: `/swarm-events` rejects cross-site requests, but a same-origin client receives progress for every session and the UI filters it. It listens on localhost by default; take care before exposing it with `--host`.
-- **No token-level progress**: progress shows status, tool call count and the latest tool name.
-- **A cancelled batch shows text after a refresh**: its status rows are gone after reloading the page, while the result text remains.
-- **No file locking**: write conflicts between subagents are avoided by how tasks are split, same as Kimi Code.
+- **Web profile**: Live progress streaming and the plugin settings panel build on the host `webServer` service and activate in the `web` profile.
+- **Network access**: `/swarm-events` validates same-origin headers (`Origin` vs `Host`) and streams progress frames to connected clients, where the UI filters events by session. DSH binds to localhost by default; if you expose the server on a shared network via `--host`, place it behind an authenticating reverse proxy or access control layer.
+- **Progress granularity**: Live rows display subagent lifecycle status, tool call counts, active tool names, and elapsed time; full Markdown responses render as each subagent finishes.
+- **Page reload & cancellation state**: Running and completed batches restore their full interactive card across page reloads. If a batch was manually cancelled, reloading the page collapses the live status rows while preserving the collected output text.
+- **Shared workspace**: Subagents work within the same workspace directory. For tasks that modify files, split items along file or module boundaries so concurrent subagents don't write to the same file simultaneously.
 
-See [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) for more.
+See [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md) for platform notes and version history.
 
 ## Development
 
 ```sh
 pnpm install
 pnpm typecheck
-pnpm test        # 160 tests
+pnpm test        # run 160 unit tests
 pnpm build       # output in lib/
-pnpm bench       # reproduce the scheduling numbers above
+pnpm bench       # run the virtual-clock scheduler benchmark
 ```
 
-Design details and the comparison with Kimi Code are in [docs/architecture.md](docs/architecture.md). The scheduling algorithm draws on [Kimi Code](https://github.com/MoonshotAI/kimi-code) (MIT).
+Architecture details and a side-by-side comparison with Kimi Code are available in [docs/architecture.md](docs/architecture.md). The scheduling design draws inspiration from [Kimi Code](https://github.com/MoonshotAI/kimi-code) (MIT).
 
-Feedback: [Issues](https://github.com/hongyue0721/dsh-kimicode-swarm/issues)
+Feedback & bug reports: [Issues](https://github.com/hongyue0721/dsh-kimicode-swarm/issues)
