@@ -51,7 +51,7 @@ DSH 宿主默认同时运行 8 个子 Agent（对应最高 8 倍提速），如�
 
 ## 快速开始
 
-支持 DeepSeek Harness **0.2.2-rc.1**（兼容 0.2.1-rc.5；若使用 DSH 0.1.x 请安装本插件的 `0.1.2` 版本）。
+支持 DeepSeek Harness **0.2.2-rc.3**（兼容 0.2.2-rc.2；若使用 DSH 0.2.1-rc.5 或 0.2.2-rc.1 请安装本插件的 `0.2.2` 版本，使用 DSH 0.1.x 请安装 `0.1.2` 版本）。
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm

@@ -1,8 +1,8 @@
 # 平台说明与版本记录 / Platform Notes & Changelog
 
-> 本文档记录插件在当前 DeepSeek Harness（0.2.2-rc.1）宿主环境下的运行边界说明，以及 0.1.x 至 0.2.x 的问题修复历史。
+> 本文档记录插件在当前 DeepSeek Harness（0.2.2-rc.3）宿主环境下的运行边界说明，以及 0.1.x 至 0.2.x 的问题修复历史。
 >
-> This document summarizes platform behavior notes on DeepSeek Harness (0.2.2-rc.1) along with the issue resolution history across 0.1.x and 0.2.x.
+> This document summarizes platform behavior notes on DeepSeek Harness (0.2.2-rc.3) along with the issue resolution history across 0.1.x and 0.2.x.
 
 ---
 
@@ -26,6 +26,7 @@
 
 | 项目 | 背景与原因 | 解决方案 |
 |---|---|---|
+| DSH 0.2.2-rc.2 / rc.3 接口适配（0.2.3） | 上游 `@deepseek-ai/dsh-subagent` 将 `SubagentActivationSpec.request` 的字段拍扁至顶层，旧嵌套传参在新宿主上无法识别 `prompt` 与 `parent` | 将依赖升级至 `^0.2.2-rc.3`（`peerDependencies` 同步约束至 `^0.2.2-rc.2`），适配扁平化 `startActivation` 入参并更新宿主契约测试 |
 | 成功批次状态展示修复（0.2.1） | 宿主的工具调用投影状态对象不含 `status` 字段，前端旧判断逻辑将其误判为取消态 | 改为显式匹配 `'cancelled'` / `'aborted'` / `'interrupted'` 状态值，正常完成的批次准确渲染为绿色完成态 |
 | Swarm 模式、Fork 与原生界面（0.2.0） | 0.1.x 无会话级触发门槛，预设仅作模型标签，前端为自定义样式 | 引入 `/swarm` 会话模式、`fork` 上下文派生、宿主 `agentPresets` 解析，以及基于宿主 UI 原语的原生进度卡片与配置面板 |
 | 并发爬坡唤醒（O1） | 启动任务后未继续注册下一轮爬坡唤醒定时器 | 重构调度唤醒逻辑，每次激活任务后自动计算并安排下一次唤醒 |

@@ -51,7 +51,7 @@ By default, DSH runs up to 8 subagents concurrently (up to an 8x speedup); raise
 
 ## Quick Start
 
-Built for DeepSeek Harness **0.2.2-rc.1** (compatible with 0.2.1-rc.5; for DSH 0.1.x, install version `0.1.2` of this plugin).
+Built for DeepSeek Harness **0.2.2-rc.3** (compatible with 0.2.2-rc.2; for DSH 0.2.1-rc.5 or 0.2.2-rc.1, install `0.2.2`, and for DSH 0.1.x, install `0.1.2`).
 
 ```bash
 dsh plugin --profile web add dsh-kimicode-swarm

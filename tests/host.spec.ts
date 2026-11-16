@@ -1,6 +1,6 @@
 /**
- * 宿主适配层测试：用假 ctx 驱动 swarm_batch，覆盖 rc.5 子 Agent 激活契约
- * （caller 投递、取消走 dispose、续做走 sendMessage 与 subagent/end）、
+ * 宿主适配层测试：用假 ctx 驱动 swarm_batch，覆盖 DSH 0.2.2-rc.2+ 子 Agent 激活契约
+ * （扁平化 SubagentActivationSpec、caller 投递、取消走 dispose、续做走 sendMessage 与 subagent/end）、
  * 结构化失败信号（限流、并发上限）、取消后结果的交付，以及配置读取。
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -134,9 +134,9 @@ describe('spawn path', () => {
     const spec = subagents.startActivation.mock.calls[0][0]
     expect(spec.provider).toBe('spawn')
     expect(spec.delivery).toBe('caller')
-    expect(spec.request.parent).toEqual({ id: 'parent' })
-    expect(spec.request.maxDepth).toBe(1)
-    expect(spec.request.prompt).toEqual([{ type: 'text', text: 'do a' }])
+    expect(spec.parent).toEqual({ id: 'parent' })
+    expect(spec.maxDepth).toBe(1)
+    expect(spec.prompt).toEqual([{ type: 'text', text: 'do a' }])
     expect(xml).toContain('completed: 2')
     expect(xml).toContain('agent_id="child-d #1 (coder)"')
   })
@@ -150,12 +150,12 @@ describe('spawn path', () => {
       }),
     )
     await execute(batch)
-    expect(subagents.startActivation.mock.calls[0][0].request.agentOptions).toBeUndefined()
+    expect(subagents.startActivation.mock.calls[0][0].agentOptions).toBeUndefined()
 
     rows = [{ type: 'coder', provider: 'p', model: 'm' }]
     subagents.startActivation.mockClear()
     await execute(batch)
-    expect(subagents.startActivation.mock.calls[0][0].request.agentOptions).toEqual({ provider: 'p', model: 'm' })
+    expect(subagents.startActivation.mock.calls[0][0].agentOptions).toEqual({ provider: 'p', model: 'm' })
   })
 
   it('honors the configured concurrency cap', async () => {
@@ -423,8 +423,8 @@ describe('fork and preset dispatch', () => {
     expect(h.subagents.getProvider).toHaveBeenCalledWith('fork')
     for (const [spec] of h.subagents.startActivation.mock.calls) {
       expect(spec.provider).toBe('fork')
-      expect(spec.request).not.toHaveProperty('agentOptions')
-      expect(spec.request).not.toHaveProperty('agentPreset')
+      expect(spec).not.toHaveProperty('agentOptions')
+      expect(spec).not.toHaveProperty('agentPreset')
     }
   })
 
@@ -440,23 +440,23 @@ describe('fork and preset dispatch', () => {
     h.services.agentPresets = { list: vi.fn(async () => [{ id: 'coder' }]) }
     await h.execute(batch)
     expect(h.services.agentPresets.list).toHaveBeenCalledTimes(1)
-    expect(h.subagents.startActivation.mock.calls[0][0].request).not.toHaveProperty('agentPreset')
+    expect(h.subagents.startActivation.mock.calls[0][0]).not.toHaveProperty('agentPreset')
   })
 
   it('awaits the roster and combines an explicit model with a real preset', async () => {
     const h = setup()
     h.services.agentPresets = { list: vi.fn(async () => [{ id: 'review' }]) }
     await h.execute({ ...batch, subagent_type: 'review', model: 'chosen' })
-    expect(h.subagents.startActivation.mock.calls[0][0].request).toMatchObject({ agentPreset: 'review', agentOptions: { model: 'chosen' } })
+    expect(h.subagents.startActivation.mock.calls[0][0]).toMatchObject({ agentPreset: 'review', agentOptions: { model: 'chosen' } })
   })
 
   it('uses mapping-only labels without selecting an agent preset', async () => {
     const h = setup(makeConfig({ modelMappingEnabled: volatile(true) as Config['modelMappingEnabled'],
       modelMapping: volatile([{ type: 'review', provider: 'p', model: 'mapped' }]) as Config['modelMapping'] }))
     await h.execute({ ...batch, subagent_type: 'review' })
-    const request = h.subagents.startActivation.mock.calls[0][0].request
-    expect(request).not.toHaveProperty('agentPreset')
-    expect(request.agentOptions).toEqual({ provider: 'p', model: 'mapped' })
+    const spec = h.subagents.startActivation.mock.calls[0][0]
+    expect(spec).not.toHaveProperty('agentPreset')
+    expect(spec.agentOptions).toEqual({ provider: 'p', model: 'mapped' })
   })
 
   it('lists both catalogs when an explicit type is unknown', async () => {
@@ -506,7 +506,7 @@ describe('preset and mapping precedence', () => {
       modelMapping: volatile([{ type: 'review', provider: 'p', model: 'mapped' }]) as Config['modelMapping'] }))
     h.services.agentPresets = { list: async () => [{ id: 'review' }] }
     await h.execute({ ...batch, subagent_type: 'review' })
-    expect(h.subagents.startActivation.mock.calls[0][0].request).toMatchObject({ agentPreset: 'review', agentOptions: { provider: 'p', model: 'mapped' } })
+    expect(h.subagents.startActivation.mock.calls[0][0]).toMatchObject({ agentPreset: 'review', agentOptions: { provider: 'p', model: 'mapped' } })
   })
   it('preserves complete item text in final values and metadata', async () => {
     const h = setup()

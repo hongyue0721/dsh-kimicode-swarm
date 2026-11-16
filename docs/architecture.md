@@ -2,7 +2,7 @@
 
 ## 1. 概览
 
-本插件面向 DeepSeek Harness（0.2.2-rc.1），提供批量并行子 Agent 调度与聊天内实时进度面板。安装、使用与配置说明请参考 [README](../README.md)，平台说明与版本变更记录请参考 [KNOWN-ISSUES](KNOWN-ISSUES.md)。本文档介绍插件的核心模块职责、自适应调度机制、进度同步协议，以及与 Kimi Code Agent Swarm 的设计对照。
+本插件面向 DeepSeek Harness（0.2.2-rc.3），提供批量并行子 Agent 调度与聊天内实时进度面板。安装、使用与配置说明请参考 [README](../README.md)，平台说明与版本变更记录请参考 [KNOWN-ISSUES](KNOWN-ISSUES.md)。本文档介绍插件的核心模块职责、自适应调度机制、进度同步协议，以及与 Kimi Code Agent Swarm 的设计对照。
 
 ## 2. 运行时架构
 
@@ -42,7 +42,7 @@ flowchart LR
 
 - **统一结构化输出**：`defineTool` 返回结构化的 `{ subagents: [...] }` 数据，供模型读取的 XML 结果与供前端渲染的 `presentationMeta` 均由该数据直接投影生成。
 - **独占调度屏障**：工具声明 `isConcurrencySafe: () => false`，借助 DSH 原生的独占屏障确保 `swarm_batch` 不与同一响应中的其他工具并发重叠，多个批次之间也严格按顺序执行。
-- **创建与取消**：新子任务通过 `ctx.subagents.startActivation({ provider, label, request, signal, delivery: 'caller' })` 启动。发布前取消由 `signal` 控制，发布后通过 `activation.dispose()` 终止；结果统一汇总至当前工具调用，避免向父会话重复投递通知。
+- **创建与取消**：新子任务通过扁平化的 `ctx.subagents.startActivation({ provider, label, prompt, parent, ..., signal, delivery: 'caller' })` 启动。发布前取消由 `signal` 控制，发布后通过 `activation.dispose()` 终止；结果统一汇总至当前工具调用，避免向父会话重复投递通知。
 - **断点续做（Resume）**：续做任务调用 `sendMessage(parent, childId, content, { signal })`，在消息投递前先挂载 `subagent/end` 监听以确保完整捕获结束事件，取消时触发 `interrupt`。遇到 429 限流重试时同样复用原 `agent_id` 继续执行，保留子 Agent 已完成的探索与上下文。
 - **上下文派生（Fork）**：传入 `fork: true` 时使用宿主的 `fork` provider，复制截至上一已完成回合（`turn/end`）的对话历史。参数归一化阶段将 `fork` 与 `resume_agent_ids`、`model`、`type`、`subagent_type` 设为互斥，直接沿用父会话的模型与上下文配置。
 

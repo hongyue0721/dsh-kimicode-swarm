@@ -525,20 +525,18 @@ function swarmTool(
           activation = await ctx.subagents.startActivation({
             provider: task.kind === 'fork' ? FORK_PROVIDER : SUBAGENT_PROVIDER,
             label: task.description,
-            request: {
-              prompt: [{ type: 'text', text: task.prompt }],
-              parent,
-              ...(maxDepth === undefined ? {} : { maxDepth }),
-              ...(task.agentPreset === undefined || task.kind === 'fork' ? {} : { agentPreset: task.agentPreset }),
-              ...(task.model === undefined || task.kind === 'fork'
-                ? {}
-                : {
-                    agentOptions: {
-                      ...(task.model.provider !== undefined ? { provider: task.model.provider } : {}),
-                      model: task.model.model,
-                    },
-                  }),
-            },
+            prompt: [{ type: 'text', text: task.prompt }],
+            parent,
+            ...(maxDepth === undefined ? {} : { maxDepth }),
+            ...(task.agentPreset === undefined || task.kind === 'fork' ? {} : { agentPreset: task.agentPreset }),
+            ...(task.model === undefined || task.kind === 'fork'
+              ? {}
+              : {
+                  agentOptions: {
+                    ...(task.model.provider !== undefined ? { provider: task.model.provider } : {}),
+                    model: task.model.model,
+                  },
+                }),
             signal,
             delivery: 'caller',
           })
